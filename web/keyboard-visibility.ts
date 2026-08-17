@@ -28,3 +28,24 @@ export function isKeyboardVisible(s: ViewportSample): boolean {
   const inset = s.innerHeight - s.visualHeight - (s.visualOffsetTop ?? 0);
   return inset > (s.thresholdPx ?? 120);
 }
+
+/**
+ * ต้องปล่อย focus ทิ้งไหม หลัง viewport เปลี่ยน
+ *
+ * **นี่คือจุดที่แก้อาการ "ปิดคีย์บอร์ดด้วยปุ่มของ OS แล้วมันเด้งกลับมาตอนปัดจอ"**
+ *
+ * ตอนผู้ใช้กดปุ่มซ่อนคีย์บอร์ดของ Android ระบบซ่อนคีย์บอร์ดให้จริง แต่ **ไม่ blur
+ * textarea ให้** สถานะที่ได้คือ "คีย์บอร์ดหายแล้วแต่ยังโฟกัสอยู่" ซึ่งแปลว่า
+ * IME ยังต่ออยู่กับช่องกรอกนั้น พอผู้ใช้แตะหรือปัดอะไรก็ตามบนหน้านั้นอีกครั้ง
+ * Chrome ถือว่ากำลังยุ่งกับช่องที่โฟกัสอยู่ จึงเรียกคีย์บอร์ดกลับขึ้นมาเอง
+ * (วัดแล้วว่าไม่มีใครในโค้ดเราหรือใน xterm เรียก focus() ระหว่างปัดจอเลย —
+ * มันแค่ไม่เคยเสีย focus ตั้งแต่แรก)
+ *
+ * ทางแก้คือทำให้ "คีย์บอร์ดถูกซ่อน" แปลว่า "ไม่โฟกัส" เสมอ แล้วจะไม่มี IME
+ * ค้างไว้ให้ระบบเรียกกลับมาได้อีก
+ */
+export function shouldReleaseFocus(
+  prevVisible: boolean, nextVisible: boolean, focused: boolean,
+): boolean {
+  return prevVisible && !nextVisible && focused;
+}

@@ -17,6 +17,47 @@
 และควรบังคับให้ `PUBLIC_ORIGIN` เป็น `.ts.net` ด้วย ไม่งั้นคนที่ยิงตรงมาที่พอร์ต
 7000 แนบ header เองจะได้ shell ฟรี — นี่คือช่องที่แย่กว่าไม่มีฟีเจอร์นี้เลย
 
+## ความปลอดภัย — ควรทำก่อนเปิด repo เป็น public
+
+### `/api/login` ไม่เช็ค origin
+
+`originAllowed()` (`server/index.ts:63`) ถูกใช้ที่ WebSocket upgrade อย่างเดียว
+(บรรทัด 137) **ทดสอบแล้วว่ายิง `POST /api/login` ข้าม origin ด้วยรหัสที่ถูกได้ 200 จริง**
+
+ผลกระทบจำกัดเพราะ cookie เป็น `SameSite=Strict` และอ่าน response ข้าม origin ไม่ได้
+ผู้โจมตีจึงขโมย session ไม่ได้และไม่รู้ด้วยซ้ำว่าเดารหัสถูกไหม แต่เว็บร้ายที่ผู้ใช้
+เผลอเปิดจะ **ยิงเข้า server ที่อยู่หลัง loopback หรือ tailnet ซึ่งตัวมันเองเข้าไม่ถึงได้**
+และเผา rate limit ของเจ้าของเครื่องทิ้งจนล็อกอินเองไม่ได้
+
+แก้: เรียก `originAllowed()` ใน handler ของ login ด้วย ตอบ 403 เมื่อไม่ผ่าน
+**แต่ต้องยอมให้ไม่มี header `Origin` เลย** ไม่งั้น curl และ client ที่ไม่ใช่เบราว์เซอร์
+จะล็อกอินไม่ได้ (ตอนนี้ `originAllowed` คืน false เมื่อ origin เป็น undefined
+ซึ่งถูกสำหรับ WebSocket แต่ผิดสำหรับ login)
+
+### ไม่มี security header สักตัว
+
+ตอบกลับมาแค่ `content-type` — ไม่มี `X-Content-Type-Options: nosniff`,
+`X-Frame-Options` / `frame-ancestors`, `Referrer-Policy` หรือ CSP เลย (ตรวจแล้ว)
+
+`SameSite=Strict` กัน clickjacking ที่ต้องใช้ cookie ไปได้เกือบหมด (หน้าที่ถูก frame
+จะเห็นแค่หน้า login) แต่สำหรับโปรเจกต์ที่ขายเรื่องความปลอดภัยเป็นจุดเด่น การไม่มี
+เลยคือสิ่งแรกที่คนอ่านจะทัก
+
+แก้: ใส่ชุด header พื้นฐานตอนเสิร์ฟ static และตั้ง CSP ที่ยอม `'self'` โดยต้องเปิด
+`'unsafe-inline'` ให้ style เพราะ xterm ฉีด style ของตัวเองเข้ามา
+
+### ชื่อใน LICENSE ยังเป็นของเก่า
+
+`LICENSE` เขียนว่า `browser-console contributors` แต่ repo ชื่อ `browser-terminal`
+แล้ว และ `package.json` ยังมี `"private": true` ซึ่งไม่ได้ห้าม repo เป็น public
+แต่ควรเอาออกถ้าคิดจะ publish ลง npm สักวัน
+
+### เอกสารทั้ง repo เป็นภาษาไทยล้วน
+
+README, คอมเมนต์ในโค้ด, ข้อความ error ที่ผู้ใช้เห็น และ commit message ทั้งหมด
+ไม่ใช่ปัญหาความปลอดภัย แต่ถ้าเป้าหมายคืออยากให้คนนอกเอาไปใช้จริง อย่างน้อย README
+กับข้อความ error ควรมีภาษาอังกฤษด้วย
+
 ## ความทนทาน
 
 ### `SHELL_CMD` ไม่ถูก trim
@@ -58,9 +99,10 @@ request ก็กิน fd ได้ (จำกัดที่ 4096 byte แล�
 
 ## เทสที่ยังขาด
 
-- **path traversal บน static server** — `serveStatic` ที่ `server/index.ts:71` มี
-  `.replace(/^(\.\.[/\\])+/, '')` อยู่ แต่ไม่มีเทสยืนยัน ควรยิง `/../.env`,
-  `/..%2f.env`, `/%2e%2e/.env` ให้ครบ นี่คือข้อที่ควรทำก่อนเปิด repo เป็น public
+- **path traversal บน static server** — **ทดสอบด้วยมือแล้วว่ากันอยู่จริง** ยิง 12 แบบ
+  (`/../.env`, `..%2f`, `%2e%2e`, double-encode, backslash, absolute-form ผ่าน raw
+  socket) รวมถึงยิงหาไฟล์ที่มีอยู่จริงนอก static root เพราะ SPA fallback บังผลได้
+  เหลือแค่ทำให้เป็นเทสอัตโนมัติ กันคนแก้ `serveStatic` แล้วเปิดช่องโดยไม่รู้ตัว
 - **body ใหญ่เกินลิมิต** — ผูกกับข้อ `readJsonBody` ข้างบน
 - **`COLORTERM=truecolor`** — `server/pty.ts:33` ตั้งไว้แต่ไม่มีเทสว่าไปถึง shell จริง
 - **ctrl+alt กับตัวที่แปลงไม่ได้** — `input-pipeline.ts` ยังไม่มีเทสเคสนี้

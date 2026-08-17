@@ -5,7 +5,7 @@ import { createInputPipeline } from './input-pipeline.js';
 import { mountKeybar } from './keybar.js';
 import { watchViewport } from './viewport.js';
 import { createGestureRecognizer } from './touch-gestures.js';
-import { isKeyboardVisible } from './keyboard-visibility.js';
+import { isKeyboardVisible, shouldReleaseFocus } from './keyboard-visibility.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -82,6 +82,20 @@ function initTerminal(): { term: Terminal; fit: FitAddon } {
   // sync สถานะปุ่มจากทุกทางที่สถานะเปลี่ยนได้โดยไม่ผ่าน toggleKeyboard ของเรา
   t.textarea?.addEventListener('focus', syncKeyboardButton);
   t.textarea?.addEventListener('blur', syncKeyboardButton);
+
+  // ผู้ใช้ปิดคีย์บอร์ดด้วยปุ่มของ OS = viewport ขยายกลับ แต่ textarea ยังโฟกัสอยู่
+  // ต้องปล่อย focus ทิ้งเองตรงนี้ ไม่งั้นการแตะหรือปัดจอครั้งถัดไปจะทำให้ Android
+  // เรียกคีย์บอร์ดกลับขึ้นมา ทั้งที่ผู้ใช้เพิ่งสั่งปิดไป — ดู shouldReleaseFocus()
+  const vv = window.visualViewport;
+  if (vv) {
+    let prevVisible = keyboardVisible();
+    vv.addEventListener('resize', () => {
+      const nextVisible = keyboardVisible();
+      if (shouldReleaseFocus(prevVisible, nextVisible, terminalFocused())) t.blur();
+      prevVisible = nextVisible;
+      syncKeyboardButton();
+    });
+  }
 
   t.onData(data => {
     pipeline.onTerminalData(data);

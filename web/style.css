@@ -55,9 +55,16 @@ html, body {
   touch-action: none;
 }
 
+/*
+ * แถวเดียว ไม่เลื่อนแนวนอน — ปุ่มยืดหดเองให้พอดีจอเสมอ
+ *
+ * overflow-x: auto ยังอยู่เป็นตาข่ายกันตาย เผื่อจอแคบกว่า 320px หรือผู้ใช้ตั้ง
+ * ขนาดตัวอักษรของระบบไว้ใหญ่มากจน min-width ดันจนล้น ในการใช้งานปกติมันจะ
+ * ไม่ทำงานเลย เพราะ 8 ช่องถูกคำนวณมาให้ลงตัวที่ 360px
+ */
 .keybar {
-  display: flex; gap: .35rem;
-  padding: .4rem .5rem calc(.4rem + env(safe-area-inset-bottom));
+  display: flex; gap: .25rem;
+  padding: .4rem .35rem calc(.4rem + env(safe-area-inset-bottom));
   overflow-x: auto;
   background: #17171d;
   border-top: 1px solid #2a2a33;
@@ -66,11 +73,21 @@ html, body {
 .keybar::-webkit-scrollbar { display: none; }
 
 .keybar-btn {
-  flex: 0 0 auto;
-  min-width: 2.75rem; min-height: 2.75rem;   /* touch target ขั้นต่ำ */
+  /* ยืดเท่าๆ กันเต็มความกว้าง — flex-basis 0 ทำให้ความกว้างของ label
+     ไม่มีผลต่อขนาดปุ่ม ปุ่ม ⇧Tab จึงไม่กว้างกว่าปุ่ม ↑ */
+  flex: 1 1 0;
+  min-width: 2.5rem;      /* 40px — พื้นล่างของเป้าแตะที่ยังกดไม่พลาด */
+  max-width: 4rem;        /* กันปุ่มบานเป็นแผ่นป้ายบนแท็บเล็ต */
+  min-height: 2.75rem;    /* 44px — ความสูงคือมิติที่นิ้วพลาดง่ายที่สุด ห้ามลด */
+  padding: 0;
   border-radius: .5rem; border: 1px solid #33333f;
   background: #21212a; color: var(--fg);
-  font-size: 1rem; font-family: ui-monospace, monospace;
+  font-size: .95rem; font-family: ui-monospace, monospace;
+  white-space: nowrap;
   touch-action: manipulation;
 }
 .keybar-btn.active { background: var(--accent); color: #04121f; border-color: var(--accent); }
+
+/* ปุ่มสลับหน้าไม่ใช่คีย์ที่ส่งอะไรให้ shell — ทำให้จางลงเพื่อไม่ให้กดสลับหน้า
+   ทั้งที่ตั้งใจจะกด ^C ที่อยู่ติดกัน */
+.keybar-swap { color: #8a8a99; }

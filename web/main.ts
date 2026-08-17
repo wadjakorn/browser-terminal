@@ -209,10 +209,6 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
           target.dispatchEvent(new MouseEvent('mouseup', mouseInit(g.x, g.y, { button: 0, buttons: 0 })));
           return;
 
-        case 'doubleTap':
-          toggleKeyboard(t);
-          return;
-
         case 'zoom': {
           const next = Math.round(
             Math.min(FONT_MAX, Math.max(FONT_MIN, fontAtPinchStart * g.scale)),
@@ -287,7 +283,7 @@ async function connect(): Promise<void> {
     showStatus(null);
     term!.reset();          // PTY ใหม่คือ process ใหม่ ไม่รู้ว่าจออยู่ในสภาพไหน
     // ไม่ focus ตอนต่อติด — บนมือถือ focus = คีย์บอร์ดเด้งขึ้นมากินครึ่งจอทันที
-    // ทั้งที่สิ่งแรกที่ผู้ใช้อยากทำคืออ่าน เปิดคีย์บอร์ดเองด้วยปุ่ม ⌨ หรือแตะสองครั้ง
+    // ทั้งที่สิ่งแรกที่ผู้ใช้อยากทำคืออ่าน เปิดคีย์บอร์ดเองด้วยปุ่ม ⌨ บนแถบล่าง
   };
 
   socket.onmessage = ev => {

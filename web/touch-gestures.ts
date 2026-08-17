@@ -17,7 +17,6 @@ export interface Point {
 export type Gesture =
   | { kind: 'wheel'; lines: number; x: number; y: number }
   | { kind: 'tap'; x: number; y: number }
-  | { kind: 'doubleTap'; x: number; y: number }
   | { kind: 'zoom'; scale: number }
   /** กดค้างครบเวลาแล้ว = กดปุ่มเมาส์ซ้ายค้าง (ลากเส้นแบ่ง sidebar ของ herdr) */
   | { kind: 'dragStart'; x: number; y: number }
@@ -31,10 +30,6 @@ export interface RecognizerOptions {
   moveThresholdPx?: number;
   /** แตะค้างนานกว่านี้ไม่นับเป็น tap */
   tapMaxMs?: number;
-  /** ระยะห่างเวลาสูงสุดระหว่างสองแตะที่ยังนับเป็น double tap */
-  doubleTapMaxMs?: number;
-  /** สองแตะต้องอยู่ในรัศมีนี้ถึงนับเป็น double tap */
-  doubleTapMaxDistPx?: number;
   /**
    * นิ้วขยับกี่ px ถึงยิง wheel หนึ่งครั้ง — ควรตั้งเท่าความสูงหนึ่งบรรทัดจริง
    *
@@ -82,8 +77,6 @@ export function createGestureRecognizer(opts: RecognizerOptions) {
   const now = opts.now ?? (() => Date.now());
   const moveThreshold = opts.moveThresholdPx ?? 8;
   const tapMaxMs = opts.tapMaxMs ?? 300;
-  const doubleTapMaxMs = opts.doubleTapMaxMs ?? 300;
-  const doubleTapMaxDist = opts.doubleTapMaxDistPx ?? 40;
   const wheelStepOpt = opts.wheelStepPx ?? 20;
   const wheelStep = (): number => {
     const v = typeof wheelStepOpt === 'function' ? wheelStepOpt() : wheelStepOpt;
@@ -117,9 +110,6 @@ export function createGestureRecognizer(opts: RecognizerOptions) {
   let momentumLastT = 0;
   let momentumEndsAt = 0;
   let lastX = 0;
-
-  // แตะครั้งก่อน ใช้ตัดสิน double tap
-  let prevTap: { x: number; y: number; t: number } | null = null;
 
   const stopMomentum = (): void => {
     if (mode === 'momentum') mode = 'idle';
@@ -250,7 +240,6 @@ export function createGestureRecognizer(opts: RecognizerOptions) {
       if (mode === 'drag') {
         endDrag();
         reset();
-        prevTap = null;      // จบการลาก ไม่ใช่การแตะ ห้ามต่อยอดเป็น doubleTap
         return;
       }
 
@@ -268,30 +257,17 @@ export function createGestureRecognizer(opts: RecognizerOptions) {
         momentumEndsAt = momentumLastT + maxMomentumMs;
       }
 
-      if (!wasTappable || !sp || elapsed > tapMaxMs) {
-        prevTap = null;
-        return;
-      }
+      if (!wasTappable || !sp || elapsed > tapMaxMs) return;
 
-      const t = now();
-      const isDouble =
-        prevTap !== null &&
-        t - prevTap.t <= doubleTapMaxMs &&
-        Math.hypot(sp.x - prevTap.x, sp.y - prevTap.y) <= doubleTapMaxDist;
-
-      if (isDouble) {
-        prevTap = null;   // ไม่ให้แตะครั้งที่สามต่อยอดเป็น double ซ้อน
-        opts.emit({ kind: 'doubleTap', x: sp.x, y: sp.y });
-      } else {
-        prevTap = { x: sp.x, y: sp.y, t };
-        opts.emit({ kind: 'tap', x: sp.x, y: sp.y });
-      }
+      // ทุกการแตะเป็น tap เสมอ ไม่มีการรวบสองแตะเป็นท่าเดียว — TUI ข้างในเป็นคน
+      // ตัดสินเองว่าคลิกสองครั้งติดกันแปลว่าอะไร (herdr ใช้เลือกคำแล้วคัดลอกให้)
+      // ถ้าเรากลืนคลิกที่สองไว้ใช้เอง TUI จะไม่มีวันเห็นดับเบิลคลิกเลย
+      opts.emit({ kind: 'tap', x: sp.x, y: sp.y });
     },
 
     onTouchCancel(): void {
       endDrag();
       reset();
-      prevTap = null;
     },
 
     /**

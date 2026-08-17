@@ -15,7 +15,6 @@ beforeEach(() => {
     now: () => clock,
     moveThresholdPx: 8,
     tapMaxMs: 300,
-    doubleTapMaxMs: 300,
   });
 });
 
@@ -47,33 +46,37 @@ describe('แตะครั้งเดียว', () => {
   });
 });
 
-describe('แตะสองครั้ง', () => {
-  it('แตะสองครั้งเร็วและใกล้กัน = doubleTap ไม่ใช่ tap ซ้ำ', () => {
+// recognizer ไม่รวบสองแตะเป็นท่าเดียวโดยเจตนา — ปล่อยให้ TUI ตัดสินเอง
+// herdr ใช้ดับเบิลคลิกเลือกคำแล้วคัดลอกให้ ถ้าเรากลืนคลิกที่สองไว้ใช้เอง
+// ฟีเจอร์นั้นจะตายโดยที่ผู้ใช้ไม่มีทางรู้ว่าทำไม
+// (การเปิดคีย์บอร์ดใช้ปุ่ม ⌨ บนแถบล่างทางเดียว)
+describe('แตะสองครั้ง = tap สองครั้ง ไม่ใช่ท่าใหม่', () => {
+  it('**แตะสองครั้งเร็วและใกล้กัน ต้องได้ tap ครบสองครั้ง พร้อมพิกัดของแต่ละครั้ง**', () => {
     r.onTouchStart([p(1, 50, 50)]); clock += 40; r.onTouchEnd([]);
     clock += 100;
     r.onTouchStart([p(1, 52, 53)]); clock += 40; r.onTouchEnd([]);
-    expect(kinds()).toEqual(['tap', 'doubleTap']);
+    expect(out).toEqual([
+      { kind: 'tap', x: 50, y: 50 },
+      { kind: 'tap', x: 52, y: 53 },
+    ]);
   });
 
-  it('แตะสองครั้งช้าเกินไป = tap สองครั้ง', () => {
-    r.onTouchStart([p(1, 50, 50)]); clock += 40; r.onTouchEnd([]);
-    clock += 900;
-    r.onTouchStart([p(1, 50, 50)]); clock += 40; r.onTouchEnd([]);
-    expect(kinds()).toEqual(['tap', 'tap']);
-  });
-
-  it('แตะสองครั้งคนละที่ = tap สองครั้ง', () => {
-    r.onTouchStart([p(1, 50, 50)]); clock += 40; r.onTouchEnd([]);
-    clock += 100;
-    r.onTouchStart([p(1, 300, 400)]); clock += 40; r.onTouchEnd([]);
-    expect(kinds()).toEqual(['tap', 'tap']);
-  });
-
-  it('แตะสามครั้งรัวๆ ไม่ยิง doubleTap ซ้อนกันเอง', () => {
+  it('แตะสามครั้งรัวๆ ได้ tap ครบสามครั้ง', () => {
     for (let i = 0; i < 3; i++) {
       r.onTouchStart([p(1, 50, 50)]); clock += 40; r.onTouchEnd([]); clock += 100;
     }
-    expect(kinds()).toEqual(['tap', 'doubleTap', 'tap']);
+    expect(kinds()).toEqual(['tap', 'tap', 'tap']);
+  });
+
+  it('แตะทันทีหลังลากเสร็จ ยังนับเป็น tap ปกติ', () => {
+    r.onTouchStart([p(1, 50, 50)]);
+    clock += 500; r.tick();                 // กดค้างจนเข้าโหมดลาก
+    r.onTouchMove([p(1, 90, 50)]);
+    r.onTouchEnd([]);
+    out.length = 0;
+    clock += 50;
+    r.onTouchStart([p(1, 50, 50)]); clock += 40; r.onTouchEnd([]);
+    expect(kinds()).toEqual(['tap']);
   });
 });
 

@@ -3,49 +3,65 @@ import type { BarKey } from './input-pipeline.js';
 
 export interface ButtonSpec { label: string; key: BarKey }
 
-/**
- * จำนวนช่องสูงสุดในหนึ่งแถว รวมปุ่มที่ตรึงไว้ (⇄ กับ ⌨) แล้ว
- *
- * มาจากเลขจริง ไม่ใช่ค่าที่เลือกเอาสวย: จอแคบสุดที่ยังต้องรองรับคือ 360px
- * หัก padding แล้วเหลือ ~349px ปุ่มกว้าง 40px + ช่องไฟ 4px ลงได้ 8 ช่องพอดี
- * ถ้าจะเพิ่มปุ่มต้องเพิ่มหน้า ไม่ใช่เพิ่มช่อง ไม่งั้นแถวจะกลับไปล้นและต้อง
- * เลื่อนแนวนอนเหมือนเดิม
- */
-export const SLOTS_PER_ROW = 8;
-/** ⇄ กับ ⌨ อยู่ครบทุกหน้า จึงกินช่องถาวรหน้าละ 2 */
-const PINNED = 2;
-export const KEYS_PER_PAGE = SLOTS_PER_ROW - PINNED;
+/** ความกว้างต่ำสุดของปุ่มที่ยังกดไม่พลาด (px) — ความสูงคุมไว้ที่ 44px ใน CSS */
+export const MIN_BTN_PX = 40;
+/** ต้องตรงกับ `gap` ของ .keybar ใน style.css ไม่งั้นจำนวนช่องที่คำนวณจะเกินจริง */
+export const GAP_PX = 4;
 
 /**
- * แบ่งหน้าตามความถี่ที่ใช้จริง ไม่ได้เรียงตามหมวด
+ * ปุ่มทั้งหมด เรียงจากใช้ถี่สุดไปหาน้อยสุด — ลำดับนี้คือสิ่งที่กำหนดว่าอะไรได้อยู่
+ * หน้าแรกตอนจอแคบ ไม่ใช่การจัดหมวด
  *
- * หน้าแรกคือชุดที่ใช้ตลอดเวลาใน TUI และ claude-code — Esc ออกจากโหมด,
- * ⇧Tab สลับโหมดของ claude-code, ↑↓ เรียกคำสั่งเก่า
- * หน้าสองคือของที่ใช้เป็นครั้งคราว — แก้กลางบรรทัด และอักขระที่คีย์บอร์ด
- * Android ต้องกดสามชั้นกว่าจะเจอ (`|` กับ `~`)
- *
- * `/` กับ `-` ถูกตัดออกโดยตั้งใจ — อยู่หน้าแรกของแป้นสัญลักษณ์ Android
- * กดสองชั้นก็ถึง ไม่คุ้มกับช่องที่มีอยู่จำกัด
+ * Esc/Tab/⇧Tab/Ctrl คือชุดที่ใช้ตลอดใน TUI และ claude-code (⇧Tab สลับโหมด)
+ * ตามด้วยลูกศรสำหรับเรียกคำสั่งเก่าและแก้กลางบรรทัด
+ * ท้ายสุดคืออักขระที่คีย์บอร์ด Android ซ่อนลึก — `|` `~` ต้องกดสามชั้น
+ * ส่วน `/` `-` กดสองชั้นก็ถึง จึงอยู่ท้ายสุดและเป็นกลุ่มแรกที่หายไปตอนจอแคบ
  */
-export const PAGES: ButtonSpec[][] = [
-  [
-    { label: 'Esc',  key: { kind: 'literal', data: '\x1b' } },
-    { label: 'Tab',  key: { kind: 'literal', data: '\t' } },
-    // CSI Z = back-tab — claude-code ใช้สลับโหมด (auto-accept / plan)
-    { label: '⇧Tab', key: { kind: 'literal', data: '\x1b[Z' } },
-    { label: 'Ctrl', key: { kind: 'modifier', name: 'ctrl' } },
-    { label: '↑',    key: { kind: 'literal', data: '\x1b[A' } },
-    { label: '↓',    key: { kind: 'literal', data: '\x1b[B' } },
-  ],
-  [
-    { label: 'Alt',  key: { kind: 'modifier', name: 'alt' } },
-    { label: '←',    key: { kind: 'literal', data: '\x1b[D' } },
-    { label: '→',    key: { kind: 'literal', data: '\x1b[C' } },
-    { label: '|',    key: { kind: 'literal', data: '|' } },
-    { label: '~',    key: { kind: 'literal', data: '~' } },
-    { label: '^C',   key: { kind: 'interrupt' } },
-  ],
+export const KEYS: ButtonSpec[] = [
+  { label: 'Esc',  key: { kind: 'literal', data: '\x1b' } },
+  { label: 'Tab',  key: { kind: 'literal', data: '\t' } },
+  // CSI Z = back-tab — claude-code ใช้สลับโหมด (auto-accept / plan)
+  { label: '⇧Tab', key: { kind: 'literal', data: '\x1b[Z' } },
+  { label: 'Ctrl', key: { kind: 'modifier', name: 'ctrl' } },
+  { label: '↑',    key: { kind: 'literal', data: '\x1b[A' } },
+  { label: '↓',    key: { kind: 'literal', data: '\x1b[B' } },
+  { label: '←',    key: { kind: 'literal', data: '\x1b[D' } },
+  { label: '→',    key: { kind: 'literal', data: '\x1b[C' } },
+  { label: 'Alt',  key: { kind: 'modifier', name: 'alt' } },
+  { label: '^C',   key: { kind: 'interrupt' } },
+  { label: '|',    key: { kind: 'literal', data: '|' } },
+  { label: '~',    key: { kind: 'literal', data: '~' } },
+  { label: '/',    key: { kind: 'literal', data: '/' } },
+  { label: '-',    key: { kind: 'literal', data: '-' } },
 ];
+
+/** จำนวนปุ่มที่ยืนเรียงกันได้ในความกว้างนี้โดยไม่ล้น */
+export function slotsThatFit(availablePx: number): number {
+  const n = Math.floor((availablePx + GAP_PX) / (MIN_BTN_PX + GAP_PX));
+  return Math.max(1, n);
+}
+
+/**
+ * แบ่งปุ่มเป็นหน้าตามจำนวนช่องที่จอรับได้จริง
+ *
+ * ถ้าลงได้หมดในแถวเดียว (นับ ⌨ ที่ตรึงไว้ด้วย) จะคืนหน้าเดียวและไม่ต้องมีปุ่ม ⇄ เลย
+ * — บนแท็บเล็ตหรือมือถือแนวนอนจึงเห็นปุ่มครบโดยไม่ต้องกดสลับ
+ *
+ * ถ้าไม่พอ ต้องกันช่องให้ ⇄ กับ ⌨ เหลือเป็นช่องคีย์จริงหน้าละ slots-2
+ * แล้วเกลี่ยให้ทุกหน้ามีจำนวนใกล้เคียงกัน ไม่ใช่ตัดเต็มหน้าไปเรื่อยๆ จนหน้าสุดท้าย
+ * เหลือปุ่มเดียวลอยๆ
+ */
+export function paginate<T>(keys: T[], slots: number): T[][] {
+  if (keys.length + 1 <= slots) return [keys];   // +1 = ⌨ ไม่ต้องมี ⇄
+
+  const perPage = Math.max(1, slots - 2);        // กันช่องให้ ⇄ กับ ⌨
+  const pageCount = Math.ceil(keys.length / perPage);
+  const balanced = Math.ceil(keys.length / pageCount);
+
+  const pages: T[][] = [];
+  for (let i = 0; i < keys.length; i += balanced) pages.push(keys.slice(i, i + balanced));
+  return pages;
+}
 
 export function mountKeybar(container: HTMLElement, handlers: {
   onKey: (key: BarKey) => void;
@@ -57,8 +73,9 @@ export function mountKeybar(container: HTMLElement, handlers: {
    * ไม่ได้ขวาง focus() ที่เรียกใน click — คีย์บอร์ดยังเปิดได้)
    */
   onToggleKeyboard: () => void;
-}): { refresh: () => void; syncKeyboard: (open: boolean) => void } {
+}): { refresh: () => void; syncKeyboard: (open: boolean) => void; destroy: () => void } {
   let page = 0;
+  let slots = 0;
   let keyboardOpen = false;
   const modifierButtons = new Map<'ctrl' | 'alt', HTMLButtonElement>();
   let kbButton: HTMLButtonElement | null = null;
@@ -80,11 +97,22 @@ export function mountKeybar(container: HTMLElement, handlers: {
     modifierButtons.get('alt')?.classList.toggle('active', state.alt);
   };
 
+  /** ความกว้างที่ปุ่มใช้ได้จริง = ความกว้างในกรอบ ลบ padding ของแถบเอง */
+  const availableWidth = (): number => {
+    const cs = getComputedStyle(container);
+    return container.clientWidth
+      - (parseFloat(cs.paddingLeft) || 0)
+      - (parseFloat(cs.paddingRight) || 0);
+  };
+
   const render = () => {
+    const pages = paginate(KEYS, slots);
+    if (page >= pages.length) page = 0;   // จอหดจนหน้าหาย ต้องไม่ค้างที่หน้าที่ไม่มีแล้ว
+
     modifierButtons.clear();
     const children: HTMLButtonElement[] = [];
 
-    for (const spec of PAGES[page]!) {
+    for (const spec of pages[page]!) {
       const btn = makeButton(spec.label, () => {
         handlers.onKey(spec.key);
         refresh();
@@ -93,20 +121,22 @@ export function mountKeybar(container: HTMLElement, handlers: {
       children.push(btn);
     }
 
-    // ⇄ สลับหน้า — ตรึงไว้ทุกหน้า ไม่งั้นสลับไปแล้วกลับมาไม่ได้
-    const swap = makeButton('⇄', () => {
-      page = (page + 1) % PAGES.length;
-      render();
-    });
-    swap.title = 'สลับชุดปุ่ม';
-    swap.classList.add('keybar-swap');
-    children.push(swap);
+    // ⇄ โผล่เฉพาะตอนที่มีอะไรให้สลับจริงๆ — จอกว้างพอใส่ครบแถวเดียวก็ไม่ต้องมี
+    if (pages.length > 1) {
+      const swap = makeButton('⇄', () => {
+        page = (page + 1) % pages.length;
+        render();
+      });
+      swap.title = `สลับชุดปุ่ม (${page + 1}/${pages.length})`;
+      swap.classList.add('keybar-swap');
+      children.push(swap);
+    }
 
     // ⌨ ตรึงไว้ทุกหน้าเพราะเป็นทางเดียวที่เปิดคีย์บอร์ดได้ ถ้าไปซ่อนอยู่หน้าใด
     // หน้าหนึ่ง ผู้ใช้จะพิมพ์ไม่ออกจนกว่าจะเดาถูกว่าต้องกด ⇄ ก่อน
     kbButton = makeButton('⌨', () => handlers.onToggleKeyboard());
     kbButton.title = 'เปิด/ปิดคีย์บอร์ด';
-    // สถานะคีย์บอร์ดต้องทาสีใหม่ทุกครั้งที่ render ไม่งั้นสลับหน้าแล้วปุ่มจะดับ
+    // ทาสถานะคีย์บอร์ดใหม่ทุกครั้งที่ render ไม่งั้นสลับหน้าหรือหมุนจอแล้วปุ่มจะดับ
     // ทั้งที่คีย์บอร์ดยังเปิดอยู่
     kbButton.classList.toggle('active', keyboardOpen);
     children.push(kbButton);
@@ -115,7 +145,23 @@ export function mountKeybar(container: HTMLElement, handlers: {
     refresh();
   };
 
-  render();
+  /**
+   * วัดใหม่แล้ว render เฉพาะตอนจำนวนช่องเปลี่ยนจริง
+   *
+   * ResizeObserver ยิงถี่มากระหว่างหมุนจอหรือคีย์บอร์ดเลื่อนขึ้นลง ถ้า render ทุกครั้ง
+   * ปุ่มจะถูกสร้างใหม่กลางนิ้วที่กำลังกดค้างอยู่ และการกดจะหลุด
+   */
+  const measure = (): void => {
+    const next = slotsThatFit(availableWidth());
+    if (next === slots) return;
+    slots = next;
+    render();
+  };
+
+  measure();
+
+  const ro = new ResizeObserver(measure);
+  ro.observe(container);
 
   return {
     refresh,
@@ -123,5 +169,6 @@ export function mountKeybar(container: HTMLElement, handlers: {
       keyboardOpen = open;
       kbButton?.classList.toggle('active', open);
     },
+    destroy: () => ro.disconnect(),
   };
 }

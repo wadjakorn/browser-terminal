@@ -160,6 +160,7 @@ pnpm test
 - Plan: `docs/superpowers/plans/2026-08-16-browser-console-mvp.md`
 - Review ของ touch gesture: `docs/2026-08-17-touch-gestures-review.md`
 - วิธี deploy และความปลอดภัย: `docs/2026-08-17-deployment-security-research.md`
+- งานที่ตั้งใจเลื่อนไว้: `TODO.md`
 
 ## License
 

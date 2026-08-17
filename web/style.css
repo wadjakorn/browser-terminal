@@ -1,0 +1,76 @@
+:root {
+  --bg: #101014;
+  --fg: #d8d8e0;
+  --accent: #6ea8fe;
+  --visible-height: 100dvh;
+  --keyboard-inset: 0px;
+}
+
+* { box-sizing: border-box; }
+
+/*
+ * ต้องมาก่อนทุก rule ที่ตั้ง display และต้องมี !important
+ *
+ * `[hidden] { display: none }` มาจาก UA stylesheet ซึ่งแพ้ author stylesheet
+ * เสมอไม่ว่า specificity จะเป็นเท่าไหร่ ดังนั้น `.login { display: grid }`
+ * และ `.app { display: flex }` จะทับมันทิ้ง แล้ว `el.hidden = true` ใน JS
+ * จะไม่มีผลอะไรเลย — หน้า login กับ terminal ซ้อนกันตลอดเวลา
+ */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, sans-serif;
+  overscroll-behavior: none;
+}
+
+.login { display: grid; place-items: center; height: 100dvh; padding: 1rem; }
+.login form { display: grid; gap: .75rem; width: min(20rem, 100%); }
+.login input, .login button {
+  padding: .75rem; font-size: 1rem; border-radius: .5rem; border: 1px solid #333;
+  background: #1b1b22; color: var(--fg);
+}
+.login button { background: var(--accent); color: #04121f; border: 0; font-weight: 600; }
+.error { color: #ff8080; margin: 0; }
+
+/* ใช้ --visible-height ที่ viewport.ts เขียนให้ ไม่ใช่ 100vh
+   เพราะคีย์บอร์ด Android ไม่หด layout viewport */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: var(--visible-height);
+}
+
+.status {
+  padding: .4rem .75rem; background: #3a2a12; color: #ffd79a;
+  font-size: .85rem; text-align: center;
+}
+
+.terminal {
+  flex: 1; min-height: 0; padding: .25rem;
+  /* เรารับ touch ทั้งหมดเอง — ไม่งั้นเบราว์เซอร์จะกิน gesture ไปทำ scroll/ซูมหน้าเว็บก่อน */
+  touch-action: none;
+}
+
+.keybar {
+  display: flex; gap: .35rem;
+  padding: .4rem .5rem calc(.4rem + env(safe-area-inset-bottom));
+  overflow-x: auto;
+  background: #17171d;
+  border-top: 1px solid #2a2a33;
+  -webkit-overflow-scrolling: touch;
+}
+.keybar::-webkit-scrollbar { display: none; }
+
+.keybar-btn {
+  flex: 0 0 auto;
+  min-width: 2.75rem; min-height: 2.75rem;   /* touch target ขั้นต่ำ */
+  border-radius: .5rem; border: 1px solid #33333f;
+  background: #21212a; color: var(--fg);
+  font-size: 1rem; font-family: ui-monospace, monospace;
+  touch-action: manipulation;
+}
+.keybar-btn.active { background: var(--accent); color: #04121f; border-color: var(--accent); }

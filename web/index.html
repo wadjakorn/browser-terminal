@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>browser-console</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="login" class="login">
+    <form id="login-form">
+      <h1>browser-console</h1>
+      <input id="password" type="password" placeholder="รหัสผ่าน" autocomplete="current-password" required>
+      <button type="submit">เข้าสู่ระบบ</button>
+      <p id="login-error" class="error" hidden></p>
+    </form>
+  </div>
+
+  <div id="app" class="app" hidden>
+    <div id="status" class="status" hidden></div>
+    <div id="terminal" class="terminal"></div>
+    <div id="keybar" class="keybar"></div>
+  </div>
+
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

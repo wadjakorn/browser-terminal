@@ -7,6 +7,10 @@ import { watchViewport } from './viewport.js';
 import { createGestureRecognizer } from './touch-gestures.js';
 import { isKeyboardVisible, shouldReleaseFocus } from './keyboard-visibility.js';
 import { fitAndSendResize } from './terminal-resize.js';
+import { createTextSelection, type TerminalPort } from './text-selection.js';
+import { createSelectionSheet } from './selection-sheet.js';
+import { createClipboard } from './clipboard.js';
+import { loadSelectionPrefs } from './selection-prefs.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -15,6 +19,9 @@ const loginPage = $('login');
 const appPage = $('app');
 const statusEl = $('status');
 const errorEl = $('login-error');
+
+let selection: ReturnType<typeof createTextSelection> | null = null;
+const clipboard = createClipboard();
 
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
@@ -63,6 +70,15 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     fontSize: loadFontSize(),
     cursorBlink: true,
     theme: { background: '#101014', foreground: '#d8d8e0' },
+    // บน iPad `navigator.platform` คือ 'MacIntel' ทำให้ xterm คิดว่าเป็น Mac แล้ว
+    // shouldForceSelection กลายเป็น `altKey && ตัวเลือกนี้` — ถ้าปล่อยเป็น false
+    // เงื่อนไขจะเป็นจริงไม่ได้เลย และ mousedown สังเคราะห์ของเราจะทะลุไปถึงแอปข้างใน
+    // กลายเป็นคลิกจริงที่สลับ pane ของ herdr ทุกครั้งที่ผู้ใช้พยายามเลือกข้อความ
+    //
+    // ตั้ง true ได้โดยไม่ต้องเช็ค platform: บนเครื่องที่ไม่ใช่ Mac ไม่มี predicate
+    // ตัวไหนอ่านค่านี้เลย (shouldForceSelection ใช้ shiftKey, shouldColumnSelect
+    // ใช้ `!(isMac && ค่านี้)` ซึ่งเป็นจริงอยู่แล้วเมื่อ isMac เป็น false)
+    macOptionClickForcesSelection: true,
   });
   const fit = new FitAddon();
   t.loadAddon(fit);
@@ -75,6 +91,11 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
 
   const keybar = mountKeybar($('keybar'), {
     onKey: key => pipeline.onBarKey(key),
+    onAction: action => {
+      if (action === 'select-mode') selection?.toggle();
+      else void doPaste(t);
+    },
+    actionState: action => action === 'select-mode' && (selection?.active() ?? false),
     modifierState: () => pipeline.modifierState(),
     onToggleKeyboard: () => toggleKeyboard(t),
     onOpenKeyboard: () => openKeyboard(t),
@@ -127,6 +148,29 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   t.onData(data => {
     pipeline.onTerminalData(data);
     keybar.refresh();
+  });
+
+  const el = $('terminal');
+  const sheet = createSelectionSheet({
+    copy: text => clipboard.write(text),
+    onClose: () => { selection?.cancel(); keybar.refresh(); },
+  });
+  $('app').append(sheet.element);
+
+  selection = createTextSelection({
+    terminal: createTerminalPort(t, el, t.element ?? el),
+    loadPrefs: columns => loadSelectionPrefs(columns),
+    onRegionPicked: text => sheet.open(text),
+    onModeChange: active => {
+      el.classList.toggle('selecting', active);
+      if (active) {
+        // Ctrl ที่ค้างอยู่จะไปยิงใส่ปุ่มถัดไปที่ไม่เกี่ยวกันเลยหลังออกจากโหมด
+        pipeline.clearModifiers();
+        t.blur();
+      }
+      keybar.refresh();
+    },
+    vibrate: ms => navigator.vibrate?.(ms),
   });
 
   bindTouch(t, fit);
@@ -186,6 +230,67 @@ let syncKeyboardButton: () => void = () => {};
  * ตามโหมดที่แอปข้างในขอไว้เอง — เราจึงไม่ต้องเขียน mouse protocol เองเลย
  * (`bindMouse` ของ xterm ผูก listener ที่ `term.element` และไม่เช็ค isTrusted)
  */
+/**
+ * สะพานจาก xterm มาเป็น TerminalPort ที่ text-selection.ts ต้องการ
+ *
+ * ทุกอย่างที่มีรูปร่างแบบ xterm ถูกกันไว้ในนี้ ตัวควบคุมจึงเทสได้กับ port ปลอม
+ */
+function createTerminalPort(t: Terminal, el: HTMLElement, target: HTMLElement): TerminalPort {
+  // ใช้เซลล์ตัวเดียวซ้ำทั้งการสแกน: การตรวจเส้นแบ่งแตะราว rows × columns เซลล์
+  // (~8,000 เซลล์บนจอแนวนอน) ทุกครั้งที่กดปุ่ม และ getCell ที่ไม่ส่ง target มาให้
+  // จะสร้าง object ใหม่ทุกครั้ง
+  const scratch = { getChars: () => '' } as unknown as import('@xterm/xterm').IBufferCell;
+  let cell: import('@xterm/xterm').IBufferCell | undefined;
+
+  const screenElement = (): HTMLElement =>
+    (el.querySelector('.xterm-screen') as HTMLElement | null) ?? target;
+
+  return {
+    get rows() { return t.rows; },
+    get columns() { return t.cols; },
+
+    viewportTop: () => t.buffer.active.viewportY,
+
+    readCell(line, column) {
+      const bufferLine = t.buffer.active.getLine(line);
+      if (!bufferLine) return '';
+      cell = bufferLine.getCell(column, cell ?? scratch);
+      return cell?.getChars() ?? '';
+    },
+
+    // endColumn ของสัญญานี้เป็น inclusive ส่วนของ xterm เป็น exclusive
+    readLine: (line, startColumn, endColumn) =>
+      t.buffer.active.getLine(line)?.translateToString(false, startColumn, endColumn + 1) ?? '',
+
+    screenMetrics() {
+      // อ่าน rect สดทุกครั้ง — แถบปุ่มที่กางออกและคีย์บอร์ดที่โผล่ขึ้นมาย้ายมันได้
+      const screen = screenElement();
+      const rect = screen.getBoundingClientRect();
+      const row = el.querySelector('.xterm-rows > div');
+      const cellHeight = row?.getBoundingClientRect().height ?? 0;
+      return {
+        cellWidth: t.cols > 0 ? rect.width / t.cols : 0,
+        cellHeight,
+        left: rect.left,
+        top: rect.top,
+      };
+    },
+
+    dispatchMouse(type, clientX, clientY) {
+      // shiftKey ทำให้ shouldForceSelection เป็นจริงบน Android/iPhone, altKey ทำให้
+      // shouldColumnSelect เป็นจริงที่นั่นและทำให้ shouldForceSelection เป็นจริงบน iPad
+      // ต้องมีทั้งคู่ ขาดตัวใดตัวหนึ่งไม่พอ
+      target.dispatchEvent(new MouseEvent(type, {
+        clientX, clientY, bubbles: true, cancelable: true, view: window,
+        shiftKey: true, altKey: true,
+        button: 0, buttons: type === 'mouseup' ? 0 : 1,
+      }));
+    },
+
+    clearSelection: () => t.clearSelection(),
+  };
+}
+
 function bindTouch(t: Terminal, fit: FitAddon): void {
   const el = $('terminal');
   const target = t.element ?? el;
@@ -285,8 +390,32 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     });
   };
 
+  /**
+   * ในโหมดเลือก นิ้วเดียวเป็นของตัวเลือกข้อความ ไม่ใช่ของ recognizer
+   *
+   * ต้องดักก่อนถึง recognizer ไม่ใช่หลัง เพราะ recognizer จะแปลงเป็น mouse report
+   * ส่งให้แอปข้างใน — ผู้ใช้ที่กำลังลากเลือกข้อความจะไปสลับ pane ของ herdr แทน
+   * และการกันไว้ตรงนี้ทำให้ท่ากดค้าง 0.4 วิ (ลากเส้นแบ่ง sidebar) ยังอยู่ครบในโหมดปกติ
+   *
+   * สองนิ้วยังส่งต่อให้ recognizer เพื่อให้บีบซูมปรับขนาดฟอนต์ได้ระหว่างเลือก
+   */
+  const selectionOwnsTouch = (e: TouchEvent): boolean =>
+    (selection?.active() ?? false) && e.touches.length < 2 && e.changedTouches.length > 0;
+
+  const firstTouch = (e: TouchEvent): Touch => e.changedTouches[0]!;
+
   el.addEventListener('touchstart', e => {
     e.preventDefault();          // กันเบราว์เซอร์สังเคราะห์ mouse/โฟกัส/ซูมหน้าเว็บเอง
+    if (selectionOwnsTouch(e)) {
+      const touch = firstTouch(e);
+      // xterm โฟกัส textarea ใน handler ของ mousedown เสมอ ซึ่งบนมือถือแปลว่า
+      // คีย์บอร์ดเด้งขึ้นมาบังพื้นที่ที่ผู้ใช้กำลังพยายามเลือกพอดี — คืนสถานะเหมือน
+      // ที่ tap และ dragStart ทำ
+      const wasVisible = keyboardVisible();
+      selection!.pointerDown(touch.clientX, touch.clientY);
+      if (!wasVisible) t.blur();
+      return;
+    }
     if (e.touches.length >= 2) fontAtPinchStart = t.options.fontSize ?? 13;
     recognizer.onTouchStart(points(e));
     pump();                      // เริ่มนับเวลากดค้าง
@@ -294,11 +423,21 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
 
   el.addEventListener('touchmove', e => {
     e.preventDefault();
+    if (selectionOwnsTouch(e)) {
+      const touch = firstTouch(e);
+      selection!.pointerMove(touch.clientX, touch.clientY);
+      return;
+    }
     recognizer.onTouchMove(points(e));
   }, { passive: false });
 
   el.addEventListener('touchend', e => {
     e.preventDefault();
+    if ((selection?.active() ?? false) && e.touches.length === 0 && e.changedTouches.length > 0) {
+      const touch = firstTouch(e);
+      selection!.pointerUp(touch.clientX, touch.clientY);
+      return;
+    }
     recognizer.onTouchEnd(points(e));
     pump();                      // ปล่อยให้ momentum ไหลต่อถ้ามี
   }, { passive: false });
@@ -307,6 +446,25 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     recognizer.onTouchCancel();
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
   });
+}
+
+/**
+ * วางข้อความจากคลิปบอร์ด
+ *
+ * ผ่าน `term.paste()` โดยตั้งใจ ไม่ใช่ส่งไบต์เอง — xterm จะห่อด้วย bracketed paste
+ * ให้ตามโหมดที่แอปข้างในขอไว้ แล้วปล่อยออกทาง onData ซึ่งวิ่งเข้า input-pipeline
+ * เส้นทางเดิม ไม่มีเส้นทางไบต์ใหม่เกิดขึ้น
+ */
+async function doPaste(t: Terminal): Promise<void> {
+  // ออกจากโหมดเลือกก่อน ไม่งั้น xterm จะล้าง selection ทิ้งทันทีที่มี user input
+  if (selection?.active()) selection.cancel();
+
+  const result = await clipboard.read();
+  if (result.ok) { t.paste(result.text); return; }
+
+  showStatus(result.reason === 'denied'
+    ? 'ไม่ได้รับอนุญาตให้อ่านคลิปบอร์ด — ใช้ปุ่มวางของคีย์บอร์ดแทน'
+    : 'เบราว์เซอร์นี้อ่านคลิปบอร์ดไม่ได้ — ใช้ปุ่มวางของคีย์บอร์ดแทน');
 }
 
 /** รอ 1 เฟรมให้ layout settle ก่อนวัดขนาด */

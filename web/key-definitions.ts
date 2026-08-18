@@ -62,7 +62,7 @@ const ctrlShortcut = (letter: string, order: number, title: string): KeySpec => 
 });
 
 export const KEY_CATALOG: readonly KeySpec[] = [
-  { id: 'esc', label: 'Esc', icon: '⎋', title: 'Escape', category: 'core', key: { kind: 'literal', data: '\x1b' }, defaultVisible: true, defaultOrder: 10 },
+  { id: 'esc', label: 'Esc', title: 'Escape', category: 'core', key: { kind: 'literal', data: '\x1b' }, defaultVisible: true, defaultOrder: 10 },
   { id: 'tab', label: 'Tab', title: 'Tab', category: 'core', key: { kind: 'literal', data: '\t' }, defaultVisible: true, defaultOrder: 20 },
   { id: 'ctrl', label: 'Ctrl', title: 'Control modifier', category: 'core', key: { kind: 'modifier', name: 'ctrl' }, defaultVisible: true, defaultOrder: 30 },
   arrow('arrow-up', '↑', 'A', 40),

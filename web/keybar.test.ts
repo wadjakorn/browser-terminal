@@ -100,7 +100,7 @@ describe('keybar customization state', () => {
   });
 
   it('uses compact icon-aware button text when available', () => {
-    expect(keyButtonText(getKeySpec('esc')!)).toEqual({ icon: '⎋', label: 'Esc' });
+    expect(keyButtonText(getKeySpec('esc')!)).toEqual({ icon: null, label: 'Esc' });
     expect(keyButtonText(getKeySpec('tab')!)).toEqual({ icon: null, label: 'Tab' });
     expect(keyButtonText(getKeySpec('shift-tab')!)).toEqual({ icon: null, label: 'Shift Tab' });
     expect(keyButtonText(getKeySpec('interrupt')!)).toEqual({ icon: null, label: '^C' });

@@ -1,174 +1,314 @@
-// web/keybar.ts
-import type { BarKey } from './input-pipeline.js';
+import type { BarKey, ModifierMode, ModifierName, ModifierState } from './input-pipeline.js';
+import { bindPressRepeat } from './press-repeat.js';
+import {
+  beginExpansion,
+  beginRestoration,
+  closeSurface,
+  initialKeyboardSurface,
+  onOrientationChange,
+  restoreKeyboardOnFold,
+  settleViewport,
+  timeoutTransition,
+  updateVisualHeight,
+  type KeyboardSurfaceState,
+} from './keyboard-surface.js';
 
 export interface ButtonSpec { label: string; key: BarKey }
+export const KEY_TARGET_PX = 44;
 
-/** ความกว้างต่ำสุดของปุ่มที่ยังกดไม่พลาด (px) — ความสูงคุมไว้ที่ 44px ใน CSS */
-export const MIN_BTN_PX = 40;
-/** ต้องตรงกับ `gap` ของ .keybar ใน style.css ไม่งั้นจำนวนช่องที่คำนวณจะเกินจริง */
-export const GAP_PX = 4;
+const REPEATABLE_CURSOR_SEQUENCES = new Set(['\x1b[A', '\x1b[B', '\x1b[C', '\x1b[D']);
 
-/**
- * ปุ่มทั้งหมด เรียงจากใช้ถี่สุดไปหาน้อยสุด — ลำดับนี้คือสิ่งที่กำหนดว่าอะไรได้อยู่
- * หน้าแรกตอนจอแคบ ไม่ใช่การจัดหมวด
- *
- * Esc/Tab/⇧Tab/Ctrl คือชุดที่ใช้ตลอดใน TUI และ claude-code (⇧Tab สลับโหมด)
- * ตามด้วยลูกศรสำหรับเรียกคำสั่งเก่าและแก้กลางบรรทัด
- * ท้ายสุดคืออักขระที่คีย์บอร์ด Android ซ่อนลึก — `|` `~` ต้องกดสามชั้น
- * ส่วน `/` `-` กดสองชั้นก็ถึง จึงอยู่ท้ายสุดและเป็นกลุ่มแรกที่หายไปตอนจอแคบ
- */
-export const KEYS: ButtonSpec[] = [
-  { label: 'Esc',  key: { kind: 'literal', data: '\x1b' } },
-  { label: 'Tab',  key: { kind: 'literal', data: '\t' } },
-  // CSI Z = back-tab — claude-code ใช้สลับโหมด (auto-accept / plan)
-  { label: '⇧Tab', key: { kind: 'literal', data: '\x1b[Z' } },
-  { label: 'Ctrl', key: { kind: 'modifier', name: 'ctrl' } },
-  { label: '↑',    key: { kind: 'literal', data: '\x1b[A' } },
-  { label: '↓',    key: { kind: 'literal', data: '\x1b[B' } },
-  { label: '←',    key: { kind: 'literal', data: '\x1b[D' } },
-  { label: '→',    key: { kind: 'literal', data: '\x1b[C' } },
-  { label: 'Alt',  key: { kind: 'modifier', name: 'alt' } },
-  { label: '^C',   key: { kind: 'interrupt' } },
-  { label: '|',    key: { kind: 'literal', data: '|' } },
-  { label: '~',    key: { kind: 'literal', data: '~' } },
-  { label: '/',    key: { kind: 'literal', data: '/' } },
-  { label: '-',    key: { kind: 'literal', data: '-' } },
-];
-
-/** จำนวนปุ่มที่ยืนเรียงกันได้ในความกว้างนี้โดยไม่ล้น */
-export function slotsThatFit(availablePx: number): number {
-  const n = Math.floor((availablePx + GAP_PX) / (MIN_BTN_PX + GAP_PX));
-  return Math.max(1, n);
+export function isRepeatableKey(key: BarKey): boolean {
+  return key.kind === 'literal' && REPEATABLE_CURSOR_SEQUENCES.has(key.data);
 }
 
-/**
- * แบ่งปุ่มเป็นหน้าตามจำนวนช่องที่จอรับได้จริง
- *
- * ถ้าลงได้หมดในแถวเดียว (นับ ⌨ ที่ตรึงไว้ด้วย) จะคืนหน้าเดียวและไม่ต้องมีปุ่ม ⇄ เลย
- * — บนแท็บเล็ตหรือมือถือแนวนอนจึงเห็นปุ่มครบโดยไม่ต้องกดสลับ
- *
- * ถ้าไม่พอ ต้องกันช่องให้ ⇄ กับ ⌨ เหลือเป็นช่องคีย์จริงหน้าละ slots-2
- * แล้วเกลี่ยให้ทุกหน้ามีจำนวนใกล้เคียงกัน ไม่ใช่ตัดเต็มหน้าไปเรื่อยๆ จนหน้าสุดท้าย
- * เหลือปุ่มเดียวลอยๆ
- */
-export function paginate<T>(keys: T[], slots: number): T[][] {
-  if (keys.length + 1 <= slots) return [keys];   // +1 = ⌨ ไม่ต้องมี ⇄
+export const KEYS: ButtonSpec[] = [
+  { label: 'Esc', key: { kind: 'literal', data: '\x1b' } },
+  { label: 'Tab', key: { kind: 'literal', data: '\t' } },
+  { label: 'Ctrl', key: { kind: 'modifier', name: 'ctrl' } },
+  { label: '↑', key: { kind: 'literal', data: '\x1b[A' } },
+  { label: '↓', key: { kind: 'literal', data: '\x1b[B' } },
+  { label: '←', key: { kind: 'literal', data: '\x1b[D' } },
+  { label: '→', key: { kind: 'literal', data: '\x1b[C' } },
+  { label: 'Shift Tab', key: { kind: 'backtab' } },
+  { label: 'Shift', key: { kind: 'modifier', name: 'shift' } },
+  { label: 'Alt', key: { kind: 'modifier', name: 'alt' } },
+  { label: '^C', key: { kind: 'interrupt' } },
+  { label: '|', key: { kind: 'literal', data: '|' } },
+  { label: '~', key: { kind: 'literal', data: '~' } },
+  { label: '/', key: { kind: 'literal', data: '/' } },
+  { label: '-', key: { kind: 'literal', data: '-' } },
+];
 
-  const perPage = Math.max(1, slots - 2);        // กันช่องให้ ⇄ กับ ⌨
-  const pageCount = Math.ceil(keys.length / perPage);
-  const balanced = Math.ceil(keys.length / pageCount);
+export function modifierPresentation(label: string, mode: ModifierMode): {
+  pressed: boolean;
+  locked: boolean;
+  label: string;
+} {
+  return {
+    pressed: mode !== 'off',
+    locked: mode === 'locked',
+    label: `${label} ${mode}`,
+  };
+}
 
-  const pages: T[][] = [];
-  for (let i = 0; i < keys.length; i += balanced) pages.push(keys.slice(i, i + balanced));
-  return pages;
+export function keybarViewState(
+  expanded: boolean,
+  restoring = false,
+): { expanded: boolean; restoring: boolean } {
+  return { expanded, restoring };
+}
+
+export function foldAction(state: KeyboardSurfaceState): 'restore-keyboard' | 'close' {
+  return restoreKeyboardOnFold(state) ? 'restore-keyboard' : 'close';
+}
+
+export function applyKeybarView(
+  expanded: boolean,
+  restoring: boolean,
+  strip: {
+    classList: { toggle(token: string, force?: boolean): boolean | void };
+    setAttribute(name: string, value: string): void;
+  },
+  container: { classList: { toggle(token: string, force?: boolean): boolean | void } },
+): void {
+  const view = keybarViewState(expanded, restoring);
+  strip.classList.toggle('expanded', view.expanded);
+  strip.classList.toggle('restoring', view.restoring);
+  strip.setAttribute('aria-label', view.expanded ? 'Expanded terminal keys' : 'Quick terminal keys');
+  container.classList.toggle('expanded', view.expanded);
+}
+
+export function applyKeyboardVisibility(
+  visible: boolean,
+  container: { classList: { toggle(token: string, force?: boolean): boolean | void } },
+): void {
+  container.classList.toggle('keyboard-visible', visible);
+}
+
+export interface MountedKeybar {
+  refresh: () => void;
+  syncKeyboard: (open: boolean, needsBottomClearance: boolean) => void;
+  closePanel: () => void;
+  onViewportFrame: (visualHeight: number) => void;
+  onViewportSettled: (keyboardVisible: boolean) => void;
+  onOrientationChange: () => void;
 }
 
 export function mountKeybar(container: HTMLElement, handlers: {
   onKey: (key: BarKey) => void;
-  modifierState: () => { ctrl: boolean; alt: boolean };
-  /**
-   * เปิด/ปิดคีย์บอร์ดบนจอ — จำเป็นเพราะ #terminal กิน touch ทั้งหมดเพื่อให้
-   * "แตะ = คลิกส่งให้ TUI" ทำงานได้ การแตะจึงไม่เปิดคีย์บอร์ดให้เองอีกต่อไป
-   * (ยืนยันบน Chrome Android แล้วว่า preventDefault ใน pointerdown ของปุ่ม
-   * ไม่ได้ขวาง focus() ที่เรียกใน click — คีย์บอร์ดยังเปิดได้)
-   */
+  modifierState: () => ModifierState;
   onToggleKeyboard: () => void;
-}): { refresh: () => void; syncKeyboard: (open: boolean) => void; destroy: () => void } {
-  let page = 0;
-  let slots = 0;
+  onOpenKeyboard: () => void;
+  onRequestKeyboardClose: () => void;
+  viewport: () => { visualHeight: number; keyboardVisible: boolean };
+  onPanelChange: (open: boolean) => void;
+}): MountedKeybar {
   let keyboardOpen = false;
-  const modifierButtons = new Map<'ctrl' | 'alt', HTMLButtonElement>();
-  let kbButton: HTMLButtonElement | null = null;
+  let surface: KeyboardSurfaceState = initialKeyboardSurface();
+  let transitionTimer: ReturnType<typeof setTimeout> | undefined;
+  const modifierButtons = new Map<ModifierName, HTMLButtonElement[]>();
+  const cancelRepeats: Array<() => void> = [];
 
-  /** ทุกปุ่มต้องกัน focus ย้ายออกจาก terminal ไม่งั้นคีย์บอร์ด Android ปิดทุกครั้งที่แตะ */
-  const makeButton = (label: string, onClick: () => void): HTMLButtonElement => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'keybar-btn';
-    btn.textContent = label;
-    btn.addEventListener('pointerdown', e => e.preventDefault());
-    btn.addEventListener('click', onClick);
-    return btn;
+  const makeButton = (label: string, onClick?: () => void): HTMLButtonElement => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'keybar-btn';
+    button.textContent = label;
+    button.addEventListener('pointerdown', event => event.preventDefault());
+    if (onClick) button.addEventListener('click', onClick);
+    return button;
+  };
+
+  const registerModifier = (name: ModifierName, button: HTMLButtonElement) => {
+    const buttons = modifierButtons.get(name) ?? [];
+    buttons.push(button);
+    modifierButtons.set(name, buttons);
   };
 
   const refresh = () => {
     const state = handlers.modifierState();
-    modifierButtons.get('ctrl')?.classList.toggle('active', state.ctrl);
-    modifierButtons.get('alt')?.classList.toggle('active', state.alt);
+    for (const [name, buttons] of modifierButtons) {
+      const label = name === 'ctrl' ? 'Ctrl' : name === 'shift' ? 'Shift' : 'Alt';
+      const presentation = modifierPresentation(label, state[name]);
+      for (const button of buttons) {
+        button.classList.toggle('active', presentation.pressed);
+        button.classList.toggle('locked', presentation.locked);
+        button.setAttribute('aria-pressed', String(presentation.pressed));
+        button.setAttribute('aria-label', presentation.label);
+        button.title = presentation.label;
+      }
+    }
   };
 
-  /** ความกว้างที่ปุ่มใช้ได้จริง = ความกว้างในกรอบ ลบ padding ของแถบเอง */
-  const availableWidth = (): number => {
-    const cs = getComputedStyle(container);
-    return container.clientWidth
-      - (parseFloat(cs.paddingLeft) || 0)
-      - (parseFloat(cs.paddingRight) || 0);
+  const makeKeyButton = (spec: ButtonSpec) => {
+    const activate = () => {
+      handlers.onKey(spec.key);
+      refresh();
+    };
+    const repeatable = isRepeatableKey(spec.key);
+    const button = makeButton(spec.label, repeatable ? undefined : activate);
+    if (repeatable) {
+      button.classList.add('keybar-btn-arrow');
+      cancelRepeats.push(bindPressRepeat(button, activate));
+    }
+    if (spec.key.kind === 'backtab') {
+      button.classList.add('keybar-btn-wide');
+      button.setAttribute('aria-label', 'Shift Tab — send back-tab');
+      button.title = 'Shift Tab — send back-tab';
+    }
+    if (spec.key.kind === 'modifier') registerModifier(spec.key.name, button);
+    return button;
   };
 
-  const render = () => {
-    const pages = paginate(KEYS, slots);
-    if (page >= pages.length) page = 0;   // จอหดจนหน้าหาย ต้องไม่ค้างที่หน้าที่ไม่มีแล้ว
+  const strip = document.createElement('div');
+  strip.className = 'keybar-strip';
+  strip.setAttribute('aria-label', 'Quick terminal keys');
+  strip.append(...KEYS.map(makeKeyButton));
 
-    modifierButtons.clear();
-    const children: HTMLButtonElement[] = [];
+  const controls = document.createElement('div');
+  controls.className = 'keybar-controls';
 
-    for (const spec of pages[page]!) {
-      const btn = makeButton(spec.label, () => {
-        handlers.onKey(spec.key);
-        refresh();
-      });
-      if (spec.key.kind === 'modifier') modifierButtons.set(spec.key.name, btn);
-      children.push(btn);
+  let moreButton: HTMLButtonElement;
+
+  const updateView = () => {
+    const occupiesLayout = surface.mode !== 'collapsed';
+    const restoring = surface.mode === 'restoring-ime';
+    const measuredHeight = occupiesLayout ? surface.panelHeightPx : null;
+
+    applyKeybarView(occupiesLayout, restoring, strip, container);
+    strip.classList.toggle('keyboard-sized', measuredHeight !== null);
+    if (measuredHeight === null) {
+      strip.style.removeProperty('--keybar-panel-height');
+    } else {
+      strip.style.setProperty('--keybar-panel-height', `${measuredHeight}px`);
+    }
+    strip.inert = restoring;
+    strip.setAttribute('aria-hidden', String(restoring));
+
+    const expanded = surface.mode === 'expanded' || surface.mode === 'replacing-ime';
+    moreButton.classList.toggle('active', expanded);
+    moreButton.setAttribute('aria-expanded', String(expanded));
+    moreButton.disabled = restoring;
+  };
+
+  const clearTransitionTimer = () => {
+    if (transitionTimer === undefined) return;
+    clearTimeout(transitionTimer);
+    transitionTimer = undefined;
+  };
+
+  const finishTransitionAfterTimeout = () => {
+    clearTransitionTimer();
+    transitionTimer = setTimeout(() => {
+      transitionTimer = undefined;
+      const wasOpen = surface.mode !== 'collapsed';
+      surface = timeoutTransition(surface);
+      updateView();
+      if (wasOpen && surface.mode === 'collapsed') handlers.onPanelChange(false);
+    }, 600);
+  };
+
+  const restoreKeyboardAndCollapse = () => {
+    const viewport = handlers.viewport();
+    surface = beginRestoration(
+      surface,
+      viewport.visualHeight,
+      Math.max(0, strip.getBoundingClientRect().height - KEY_TARGET_PX),
+    );
+    updateView();
+    finishTransitionAfterTimeout();
+    // ต้องอยู่ใน click gesture เดิม ไม่งั้น mobile browser จะปฏิเสธการเปิด IME
+    handlers.onOpenKeyboard();
+  };
+
+  moreButton = makeButton('⋯', () => {
+    if (surface.mode !== 'collapsed') {
+      clearTransitionTimer();
+      if (foldAction(surface) === 'restore-keyboard') {
+        restoreKeyboardAndCollapse();
+        return;
+      }
+      surface = closeSurface(surface);
+      updateView();
+      handlers.onPanelChange(false);
+      return;
     }
 
-    // ⇄ โผล่เฉพาะตอนที่มีอะไรให้สลับจริงๆ — จอกว้างพอใส่ครบแถวเดียวก็ไม่ต้องมี
-    if (pages.length > 1) {
-      const swap = makeButton('⇄', () => {
-        page = (page + 1) % pages.length;
-        render();
-      });
-      swap.title = `สลับชุดปุ่ม (${page + 1}/${pages.length})`;
-      swap.classList.add('keybar-swap');
-      children.push(swap);
+    const viewport = handlers.viewport();
+    // เมื่อ keyboard เปิด collapsed bar มี margin กันขอบ IME อยู่ ต้องโอนพื้นที่นั้น
+    // เข้า panel ก่อนถอด class expanded ไม่งั้น keybar จะตกลงทันทีหนึ่งจังหวะ
+    const startingPanelHeight = viewport.keyboardVisible
+      ? parseFloat(getComputedStyle(container).marginBottom) || 0
+      : 0;
+    surface = beginExpansion(
+      surface,
+      viewport.keyboardVisible,
+      viewport.visualHeight,
+      startingPanelHeight,
+    );
+    updateView();
+    handlers.onRequestKeyboardClose();
+    handlers.onPanelChange(true);
+    if (surface.mode === 'replacing-ime') finishTransitionAfterTimeout();
+  });
+  moreButton.title = 'แสดง/ซ่อนปุ่มทั้งหมด';
+  moreButton.setAttribute('aria-label', 'แสดง/ซ่อนปุ่มทั้งหมด');
+  moreButton.setAttribute('aria-expanded', 'false');
+
+  const keyboardButton = makeButton('⌨', () => {
+    const restoringPanel = surface.mode !== 'collapsed';
+    if (restoringPanel) {
+      restoreKeyboardAndCollapse();
+      return;
     }
+    handlers.onToggleKeyboard();
+  });
+  keyboardButton.title = 'เปิด/ปิดคีย์บอร์ด';
+  keyboardButton.setAttribute('aria-label', 'เปิด/ปิดคีย์บอร์ด');
+  controls.append(moreButton, keyboardButton);
 
-    // ⌨ ตรึงไว้ทุกหน้าเพราะเป็นทางเดียวที่เปิดคีย์บอร์ดได้ ถ้าไปซ่อนอยู่หน้าใด
-    // หน้าหนึ่ง ผู้ใช้จะพิมพ์ไม่ออกจนกว่าจะเดาถูกว่าต้องกด ⇄ ก่อน
-    kbButton = makeButton('⌨', () => handlers.onToggleKeyboard());
-    kbButton.title = 'เปิด/ปิดคีย์บอร์ด';
-    // ทาสถานะคีย์บอร์ดใหม่ทุกครั้งที่ render ไม่งั้นสลับหน้าหรือหมุนจอแล้วปุ่มจะดับ
-    // ทั้งที่คีย์บอร์ดยังเปิดอยู่
-    kbButton.classList.toggle('active', keyboardOpen);
-    children.push(kbButton);
-
-    container.replaceChildren(...children);
-    refresh();
-  };
-
-  /**
-   * วัดใหม่แล้ว render เฉพาะตอนจำนวนช่องเปลี่ยนจริง
-   *
-   * ResizeObserver ยิงถี่มากระหว่างหมุนจอหรือคีย์บอร์ดเลื่อนขึ้นลง ถ้า render ทุกครั้ง
-   * ปุ่มจะถูกสร้างใหม่กลางนิ้วที่กำลังกดค้างอยู่ และการกดจะหลุด
-   */
-  const measure = (): void => {
-    const next = slotsThatFit(availableWidth());
-    if (next === slots) return;
-    slots = next;
-    render();
-  };
-
-  measure();
-
-  const ro = new ResizeObserver(measure);
-  ro.observe(container);
+  const row = document.createElement('div');
+  row.className = 'keybar-row';
+  row.append(strip, controls);
+  container.replaceChildren(row);
+  window.addEventListener('blur', () => cancelRepeats.forEach(cancel => cancel()));
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) cancelRepeats.forEach(cancel => cancel());
+  });
+  refresh();
 
   return {
     refresh,
-    syncKeyboard: (open: boolean) => {
+    syncKeyboard(open: boolean, needsBottomClearance: boolean) {
       keyboardOpen = open;
-      kbButton?.classList.toggle('active', open);
+      keyboardButton.classList.toggle('active', keyboardOpen);
+      applyKeyboardVisibility(needsBottomClearance, container);
     },
-    destroy: () => ro.disconnect(),
+    closePanel() {
+      if (surface.mode === 'collapsed') return;
+      clearTransitionTimer();
+      surface = closeSurface(surface);
+      updateView();
+      handlers.onPanelChange(false);
+    },
+    onViewportFrame(visualHeight: number) {
+      const next = updateVisualHeight(surface, visualHeight);
+      if (next === surface) return;
+      surface = next;
+      updateView();
+    },
+    onViewportSettled(keyboardVisible: boolean) {
+      const next = settleViewport(surface, keyboardVisible);
+      if (next === surface) return;
+      surface = next;
+      clearTransitionTimer();
+      updateView();
+    },
+    onOrientationChange() {
+      surface = onOrientationChange(surface);
+      clearTransitionTimer();
+      updateView();
+    },
   };
 }

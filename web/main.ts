@@ -2,10 +2,11 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { createInputPipeline } from './input-pipeline.js';
-import { mountKeybar } from './keybar.js';
+import { mountKeybar, type MountedKeybar } from './keybar.js';
 import { watchViewport } from './viewport.js';
 import { createGestureRecognizer } from './touch-gestures.js';
 import { isKeyboardVisible, shouldReleaseFocus } from './keyboard-visibility.js';
+import { fitAndSendResize } from './terminal-resize.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -20,6 +21,7 @@ let fitAddon: FitAddon | null = null;
 let ws: WebSocket | null = null;
 let backoffMs = 1000;
 let stopped = false;   // true เมื่อถูกเตะด้วย code 4000 — ห้าม reconnect
+let resetInputModifiers: () => void = () => {};
 
 function showStatus(text: string | null): void {
   if (text === null) { statusEl.hidden = true; return; }
@@ -55,7 +57,7 @@ function backToLogin(): void {
   showStatus(null);
 }
 
-function initTerminal(): { term: Terminal; fit: FitAddon } {
+function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar } {
   const t = new Terminal({
     fontFamily: 'ui-monospace, monospace',
     fontSize: loadFontSize(),
@@ -75,9 +77,34 @@ function initTerminal(): { term: Terminal; fit: FitAddon } {
     onKey: key => pipeline.onBarKey(key),
     modifierState: () => pipeline.modifierState(),
     onToggleKeyboard: () => toggleKeyboard(t),
+    onOpenKeyboard: () => openKeyboard(t),
+    onRequestKeyboardClose: () => t.blur(),
+    viewport: () => ({
+      visualHeight: window.visualViewport?.height ?? window.innerHeight,
+      // บน desktop keyboardVisible() ใช้ focus เพื่อให้ปุ่ม ⌨ toggle ได้ แต่ focus
+      // ไม่ได้หมายความว่าจะมี viewport height ถูกคืนมา จึงวัด replacement เฉพาะ
+      // อุปกรณ์สัมผัสที่มี Visual Viewport API เท่านั้น
+      keyboardVisible: Boolean(
+        window.visualViewport && 'ontouchstart' in window && keyboardVisible()
+      ),
+    }),
+    onPanelChange: () => {
+      requestAnimationFrame(() => sendResize());
+    },
   });
 
-  syncKeyboardButton = () => keybar.syncKeyboard(keyboardVisible());
+  resetInputModifiers = () => {
+    pipeline.clearModifiers();
+    keybar.refresh();
+  };
+
+  syncKeyboardButton = () => {
+    const open = keyboardVisible();
+    keybar.syncKeyboard(
+      open,
+      Boolean(window.visualViewport && 'ontouchstart' in window && open),
+    );
+  };
 
   // sync สถานะปุ่มจากทุกทางที่สถานะเปลี่ยนได้โดยไม่ผ่าน toggleKeyboard ของเรา
   t.textarea?.addEventListener('focus', syncKeyboardButton);
@@ -104,7 +131,7 @@ function initTerminal(): { term: Terminal; fit: FitAddon } {
 
   bindTouch(t, fit);
 
-  return { term: t, fit };
+  return { term: t, fit, keybar };
 }
 
 // ─────────────────────────── touch ───────────────────────────
@@ -136,12 +163,18 @@ function keyboardVisible(): boolean {
 function toggleKeyboard(t: Terminal): void {
   if (keyboardVisible()) {
     t.blur();
+    syncKeyboardButton();
   } else {
-    // blur ก่อน focus เสมอ — กรณี "โฟกัสอยู่แต่คีย์บอร์ดถูกซ่อน" การ focus ซ้ำ
-    // เฉยๆ ไม่ทำให้ Android เรียกคีย์บอร์ดกลับมา ต้องให้เสีย focus ก่อน
-    t.blur();
-    t.focus();
+    openKeyboard(t);
   }
+}
+
+function openKeyboard(t: Terminal): void {
+  // blur ก่อน focus เสมอ — กรณี "โฟกัสอยู่แต่คีย์บอร์ดถูกซ่อน" การ focus ซ้ำ
+  // เฉยๆ ไม่ทำให้ Android เรียกคีย์บอร์ดกลับมา ต้องให้เสีย focus ก่อน
+  // และต้องทำทั้งคู่ใน click gesture เดิมเพื่อให้ mobile browser ยอมเปิด IME
+  t.blur();
+  t.focus();
   syncKeyboardButton();
 }
 
@@ -296,6 +329,7 @@ async function connect(): Promise<void> {
     backoffMs = 1000;
     showStatus(null);
     term!.reset();          // PTY ใหม่คือ process ใหม่ ไม่รู้ว่าจออยู่ในสภาพไหน
+    resetInputModifiers();
     // ไม่ focus ตอนต่อติด — บนมือถือ focus = คีย์บอร์ดเด้งขึ้นมากินครึ่งจอทันที
     // ทั้งที่สิ่งแรกที่ผู้ใช้อยากทำคืออ่าน เปิดคีย์บอร์ดเองด้วยปุ่ม ⌨ บนแถบล่าง
   };
@@ -339,9 +373,8 @@ async function connect(): Promise<void> {
 }
 
 function sendResize(): void {
-  if (!term || !fitAddon || ws?.readyState !== WebSocket.OPEN) return;
-  fitAddon.fit();
-  ws.send(JSON.stringify({ t: 'resize', cols: term.cols, rows: term.rows }));
+  if (!term || !fitAddon) return;
+  fitAndSendResize(fitAddon, term, ws);
 }
 
 async function startSession(): Promise<void> {
@@ -354,9 +387,15 @@ async function startSession(): Promise<void> {
   fitAddon = created.fit;
 
   watchViewport(() => {
+    created.keybar.onViewportSettled(keyboardVisible());
     sendResize();
     syncKeyboardButton();   // ระบบซ่อน/แสดงคีย์บอร์ดเอง ไม่ยิง focus/blur ให้เรา
+  }, frame => {
+    // อัปเดตความสูง panel ทุก visualViewport frame เพื่อให้ตาม animation ของ IME
+    // แต่ fit/sendResize ยังถูก debounce ใน callback ด้านบนเพียงครั้งเดียว
+    created.keybar.onViewportFrame(frame.height);
   });
+  window.addEventListener('orientationchange', created.keybar.onOrientationChange);
   await connect();
 }
 

@@ -55,33 +55,75 @@ html, body {
   touch-action: none;
 }
 
-/*
- * แถวเดียว ไม่เลื่อนแนวนอน — ปุ่มยืดหดเองให้พอดีจอเสมอ
- *
- * จำนวนปุ่มถูกคำนวณจากความกว้างที่วัดได้จริงใน keybar.ts แล้ว (slotsThatFit)
- * overflow-x: auto จึงเป็นแค่ตาข่ายกันตาย เผื่อผู้ใช้ตั้งขนาดตัวอักษรของระบบไว้
- * ใหญ่มากจน min-width ดันจนล้น ในการใช้งานปกติมันจะไม่ทำงานเลย
- *
- * ⚠️ gap ต้องตรงกับ GAP_PX ใน keybar.ts ไม่งั้นจำนวนช่องที่คำนวณจะเกินความจริง
- * แล้วแถบจะกลับไปล้น
- */
 .keybar {
-  display: flex; gap: .25rem; justify-content: center;
-  padding: .4rem .35rem calc(.4rem + env(safe-area-inset-bottom));
-  overflow-x: auto;
+  flex: none;
   background: #17171d;
   border-top: 1px solid #2a2a33;
-  -webkit-overflow-scrolling: touch;
 }
-.keybar::-webkit-scrollbar { display: none; }
+
+/* บาง mobile browser รายงานขอบ visual viewport ชิด/ล้ำเข้า keyboard accessory
+   เล็กน้อย เว้น seam เฉพาะตอน IME เปิดเพื่อให้เป้าแตะ 44px ไม่ถูกบังด้านล่าง */
+.keybar.keyboard-visible:not(.expanded) { margin-bottom: .5rem; }
+
+.keybar-row {
+  display: flex;
+  gap: .25rem;
+  min-width: 0;
+  padding: .4rem .35rem calc(.4rem + env(safe-area-inset-bottom));
+}
+
+.keybar.expanded .keybar-row { padding-bottom: .4rem; }
+
+.keybar-strip {
+  display: flex;
+  flex: 1 1 auto;
+  gap: .25rem;
+  min-width: 0;
+  max-height: 2.75rem; /* 44px; keep synchronized with KEY_TARGET_PX */
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.keybar-strip::-webkit-scrollbar { display: none; }
+
+/* Expansion keeps the existing first row anchored and lets only the keys that
+   were beyond its right edge wrap into the newly available area below. */
+.keybar-strip.expanded {
+  flex-wrap: wrap;
+  align-content: flex-start;
+  max-height: min(calc(2.75rem + 18rem), calc(2.75rem + 50dvh));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.keybar-strip.expanded.keyboard-sized {
+  height: calc(2.75rem + var(--keybar-panel-height));
+  max-height: none;
+}
+
+.keybar-strip.restoring {
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.keybar-controls {
+  display: flex;
+  flex: none;
+  align-self: flex-start;
+  gap: .25rem;
+  padding-left: .25rem;
+  border-left: 1px solid #33333f;
+  background: #17171d;
+  margin-left: auto;
+}
 
 .keybar-btn {
-  /* ยืดเท่าๆ กันเต็มความกว้าง — flex-basis 0 ทำให้ความกว้างของ label
-     ไม่มีผลต่อขนาดปุ่ม ปุ่ม ⇧Tab จึงไม่กว้างกว่าปุ่ม ↑ */
-  flex: 1 1 0;
-  min-width: 2.5rem;      /* 40px — พื้นล่างของเป้าแตะที่ยังกดไม่พลาด */
+  flex: 0 0 2.75rem;
+  min-width: 2.75rem;
   max-width: 4rem;        /* กันปุ่มบานเป็นแผ่นป้ายบนแท็บเล็ต */
-  min-height: 2.75rem;    /* 44px — ความสูงคือมิติที่นิ้วพลาดง่ายที่สุด ห้ามลด */
+  min-height: 2.75rem;
   padding: 0;
   border-radius: .5rem; border: 1px solid #33333f;
   background: #21212a; color: var(--fg);
@@ -90,7 +132,23 @@ html, body {
   touch-action: manipulation;
 }
 .keybar-btn.active { background: var(--accent); color: #04121f; border-color: var(--accent); }
+.keybar-btn-wide { flex-basis: 4.5rem; max-width: 4.5rem; font-size: .8rem; }
 
-/* ปุ่มสลับหน้าไม่ใช่คีย์ที่ส่งอะไรให้ shell — ทำให้จางลงเพื่อไม่ให้กดสลับหน้า
-   ทั้งที่ตั้งใจจะกด ^C ที่อยู่ติดกัน */
-.keybar-swap { color: #8a8a99; }
+.keybar-strip .keybar-btn-arrow {
+  touch-action: pan-x;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.keybar-strip.expanded .keybar-btn-arrow { touch-action: manipulation; }
+
+.keybar-btn.locked { position: relative; }
+.keybar-btn.locked::after {
+  content: '🔒';
+  position: absolute;
+  top: .05rem;
+  right: .12rem;
+  font-size: .55rem;
+  line-height: 1;
+}

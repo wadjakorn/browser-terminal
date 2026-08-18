@@ -1,23 +1,31 @@
-// web/input-pipeline.ts
+export type ModifierName = 'ctrl' | 'shift' | 'alt';
+export type ModifierMode = 'off' | 'armed' | 'locked';
+export type ModifierState = Record<ModifierName, ModifierMode>;
+
 export type BarKey =
-  | { kind: 'modifier'; name: 'ctrl' | 'alt' }
+  | { kind: 'modifier'; name: ModifierName }
   | { kind: 'literal'; data: string }
-  | { kind: 'interrupt' };
+  | { kind: 'interrupt' }
+  | { kind: 'backtab' };
 
 export interface Modes {
   applicationCursorKeysMode: boolean;
 }
 
 const ESC = '\x1b';
+const DOUBLE_TAP_MS = 300;
 const encoder = new TextEncoder();
+const MODIFIERS: ModifierName[] = ['ctrl', 'shift', 'alt'];
 
-/** ปุ่มที่มีทั้งรูปแบบ CSI (`ESC[X`) และ SS3 (`ESCOX`) */
 const CURSOR_FINALS = new Set(['A', 'B', 'C', 'D', 'H', 'F']);
-
-/** ctrl + สัญลักษณ์เหล่านี้มี control code ตามมาตรฐาน */
 const CTRL_SYMBOLS: Record<string, number> = {
   '[': 0x1b, '\\': 0x1c, ']': 0x1d, '^': 0x1e,
   '_': 0x1f, '-': 0x1f, '?': 0x7f, ' ': 0x00,
+};
+const SHIFT_SYMBOLS: Record<string, string> = {
+  '`': '~', '1': '!', '2': '@', '3': '#', '4': '$', '5': '%', '6': '^',
+  '7': '&', '8': '*', '9': '(', '0': ')', '-': '_', '=': '+', '[': '{',
+  ']': '}', '\\': '|', ';': ':', "'": '"', ',': '<', '.': '>', '/': '?',
 };
 
 interface Parsed {
@@ -26,14 +34,12 @@ interface Parsed {
 }
 
 function classify(data: string): Parsed {
-  // ESC เดี่ยวเป็น "ตัวอักษร" ไม่ใช่ sequence — ไม่งั้น Alt+Esc จะกลืน modifier ทิ้ง
   if (data === ESC) return { kind: 'single' };
   if (data.startsWith(ESC)) {
-    const m = /^\x1b(?:\[|O)([A-Z])$/.exec(data);
-    if (m && CURSOR_FINALS.has(m[1]!)) return { kind: 'cursor', final: m[1]! };
+    const match = /^\x1b(?:\[|O)([A-Z])$/.exec(data);
+    if (match && CURSOR_FINALS.has(match[1]!)) return { kind: 'cursor', final: match[1]! };
     return { kind: 'sequence' };
   }
-  // นับเป็นตัวอักษรเดี่ยวเมื่อเป็น code point เดียว ไม่ใช่จำนวน UTF-16 unit
   return [...data].length === 1 ? { kind: 'single' } : { kind: 'paste' };
 }
 
@@ -41,58 +47,77 @@ export function createInputPipeline(deps: {
   send: (bytes: Uint8Array) => void;
   getModes: () => Modes;
 }) {
-  let ctrl = false;
-  let alt = false;
+  const state: ModifierState = { ctrl: 'off', shift: 'off', alt: 'off' };
+  const armedAt: Partial<Record<ModifierName, number>> = {};
 
-  const clear = () => { ctrl = false; alt = false; };
+  const active = (name: ModifierName) => state[name] !== 'off';
+  const sendText = (text: string) => deps.send(encoder.encode(text));
+  const consumeArmed = () => {
+    for (const name of MODIFIERS) {
+      if (state[name] === 'armed') state[name] = 'off';
+      delete armedAt[name];
+    }
+  };
+  const clearModifiers = () => {
+    for (const name of MODIFIERS) state[name] = 'off';
+    for (const name of MODIFIERS) delete armedAt[name];
+  };
 
-  const sendText = (s: string) => deps.send(encoder.encode(s));
+  function tapModifier(name: ModifierName, timestampMs: number): void {
+    if (state[name] === 'off') {
+      state[name] = 'armed';
+      armedAt[name] = timestampMs;
+    } else if (state[name] === 'armed') {
+      state[name] = timestampMs - armedAt[name]! <= DOUBLE_TAP_MS ? 'locked' : 'off';
+      delete armedAt[name];
+    } else {
+      state[name] = 'off';
+      delete armedAt[name];
+    }
+  }
 
-  function handleSingle(ch: string): void {
+  function shiftCharacter(character: string): string {
+    if (character >= 'a' && character <= 'z') return character.toUpperCase();
+    return SHIFT_SYMBOLS[character] ?? character;
+  }
+
+  function handleSingle(rawCharacter: string): void {
+    const character = active('shift') ? shiftCharacter(rawCharacter) : rawCharacter;
     let bytes: number[] | null = null;
 
-    if (ctrl) {
-      const code = ch.charCodeAt(0);
+    if (active('ctrl')) {
+      const code = character.charCodeAt(0);
       if ((code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a)) {
         bytes = [code & 0x1f];
-      } else if (ch in CTRL_SYMBOLS) {
-        bytes = [CTRL_SYMBOLS[ch]!];
+      } else if (character in CTRL_SYMBOLS) {
+        bytes = [CTRL_SYMBOLS[character]!];
       }
-      // ctrl กับตัวที่ไม่มี control code → bytes ยังเป็น null, ตกไปส่งดิบ
     }
 
-    if (bytes === null) {
-      const raw = [...encoder.encode(ch)];
-      bytes = alt ? [0x1b, ...raw] : raw;
-    } else if (alt) {
-      bytes = [0x1b, ...bytes];
-    }
-
-    clear();
+    if (bytes === null) bytes = [...encoder.encode(character)];
+    if (active('alt')) bytes = [0x1b, ...bytes];
+    consumeArmed();
     deps.send(new Uint8Array(bytes));
   }
 
   function handleCursor(final: string): void {
-    if (ctrl || alt) {
-      const n = 1 + (alt ? 2 : 0) + (ctrl ? 4 : 0);
-      clear();
-      sendText(`${ESC}[1;${n}${final}`);
+    const modified = MODIFIERS.some(active);
+    if (modified) {
+      const value = 1 + (active('shift') ? 1 : 0) + (active('alt') ? 2 : 0) + (active('ctrl') ? 4 : 0);
+      consumeArmed();
+      sendText(`${ESC}[1;${value}${final}`);
       return;
     }
-    clear();
-    sendText(deps.getModes().applicationCursorKeysMode
-      ? `${ESC}O${final}`
-      : `${ESC}[${final}`);
+    consumeArmed();
+    sendText(deps.getModes().applicationCursorKeysMode ? `${ESC}O${final}` : `${ESC}[${final}`);
   }
 
   function feed(data: string): void {
     const parsed = classify(data);
-    switch (parsed.kind) {
-      case 'cursor':   return handleCursor(parsed.final!);
-      case 'single':   return handleSingle(data);
-      case 'sequence':
-      case 'paste':    clear(); return sendText(data);
-    }
+    if (parsed.kind === 'cursor') return handleCursor(parsed.final!);
+    if (parsed.kind === 'single') return handleSingle(data);
+    consumeArmed();
+    sendText(data);
   }
 
   return {
@@ -100,22 +125,25 @@ export function createInputPipeline(deps: {
       feed(data);
     },
 
-    onBarKey(key: BarKey): void {
-      if (key.kind === 'modifier') {
-        if (key.name === 'ctrl') ctrl = !ctrl;
-        else alt = !alt;
+    onBarKey(key: BarKey, timestampMs = performance.now()): void {
+      if (key.kind === 'modifier') return tapModifier(key.name, timestampMs);
+      if (key.kind === 'interrupt') {
+        consumeArmed();
+        deps.send(new Uint8Array([0x03]));
         return;
       }
-      if (key.kind === 'interrupt') {
-        clear();
-        deps.send(new Uint8Array([0x03]));
+      if (key.kind === 'backtab') {
+        consumeArmed();
+        sendText(`${ESC}[Z`);
         return;
       }
       feed(key.data);
     },
 
-    modifierState(): { ctrl: boolean; alt: boolean } {
-      return { ctrl, alt };
+    modifierState(): ModifierState {
+      return { ...state };
     },
+
+    clearModifiers,
   };
 }

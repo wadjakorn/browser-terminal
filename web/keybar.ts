@@ -1,4 +1,21 @@
 import type { BarKey, ModifierMode, ModifierName, ModifierState } from './input-pipeline.js';
+import {
+  DEFAULT_KEY_IDS,
+  KEY_CATALOG,
+  KEY_TARGET_PX,
+  isRepeatableKey,
+  resolveKeySpecs,
+  type KeySpec,
+} from './key-definitions.js';
+import {
+  loadKeybarPreferences,
+  moveKey,
+  resetKeybarPreferences,
+  saveKeybarPreferences,
+  setKeyHidden,
+  visibleKeyIds,
+  type KeybarPreferences,
+} from './keybar-preferences.js';
 import { bindPressRepeat } from './press-repeat.js';
 import {
   beginExpansion,
@@ -13,32 +30,9 @@ import {
   type KeyboardSurfaceState,
 } from './keyboard-surface.js';
 
-export interface ButtonSpec { label: string; key: BarKey }
-export const KEY_TARGET_PX = 44;
-
-const REPEATABLE_CURSOR_SEQUENCES = new Set(['\x1b[A', '\x1b[B', '\x1b[C', '\x1b[D']);
-
-export function isRepeatableKey(key: BarKey): boolean {
-  return key.kind === 'literal' && REPEATABLE_CURSOR_SEQUENCES.has(key.data);
-}
-
-export const KEYS: ButtonSpec[] = [
-  { label: 'Esc', key: { kind: 'literal', data: '\x1b' } },
-  { label: 'Tab', key: { kind: 'literal', data: '\t' } },
-  { label: 'Ctrl', key: { kind: 'modifier', name: 'ctrl' } },
-  { label: '↑', key: { kind: 'literal', data: '\x1b[A' } },
-  { label: '↓', key: { kind: 'literal', data: '\x1b[B' } },
-  { label: '←', key: { kind: 'literal', data: '\x1b[D' } },
-  { label: '→', key: { kind: 'literal', data: '\x1b[C' } },
-  { label: 'Shift Tab', key: { kind: 'backtab' } },
-  { label: 'Shift', key: { kind: 'modifier', name: 'shift' } },
-  { label: 'Alt', key: { kind: 'modifier', name: 'alt' } },
-  { label: '^C', key: { kind: 'interrupt' } },
-  { label: '|', key: { kind: 'literal', data: '|' } },
-  { label: '~', key: { kind: 'literal', data: '~' } },
-  { label: '/', key: { kind: 'literal', data: '/' } },
-  { label: '-', key: { kind: 'literal', data: '-' } },
-];
+export type ButtonSpec = KeySpec;
+export { KEY_TARGET_PX, isRepeatableKey };
+export const KEYS = resolveKeySpecs(DEFAULT_KEY_IDS);
 
 export function modifierPresentation(label: string, mode: ModifierMode): {
   pressed: boolean;
@@ -86,6 +80,18 @@ export function applyKeyboardVisibility(
   container.classList.toggle('keyboard-visible', visible);
 }
 
+export function keybarVisibleLabels(preferences: KeybarPreferences): string[] {
+  return resolveKeySpecs(visibleKeyIds(preferences)).map(key => key.label);
+}
+
+export function keybarSettingsLabel(customizing: boolean): string {
+  return customizing ? 'Close key customization' : 'Customize terminal keys';
+}
+
+export function keyButtonText(spec: KeySpec): { icon: string | null; label: string } {
+  return { icon: spec.icon ?? null, label: spec.shortLabel ?? spec.label };
+}
+
 export interface MountedKeybar {
   refresh: () => void;
   syncKeyboard: (open: boolean, needsBottomClearance: boolean) => void;
@@ -107,8 +113,11 @@ export function mountKeybar(container: HTMLElement, handlers: {
   let keyboardOpen = false;
   let surface: KeyboardSurfaceState = initialKeyboardSurface();
   let transitionTimer: ReturnType<typeof setTimeout> | undefined;
+  let preferences: KeybarPreferences = loadKeybarPreferences();
+  let customizing = false;
   const modifierButtons = new Map<ModifierName, HTMLButtonElement[]>();
   const cancelRepeats: Array<() => void> = [];
+  let cancelRenderedRepeats: Array<() => void> = [];
 
   const makeButton = (label: string, onClick?: () => void): HTMLButtonElement => {
     const button = document.createElement('button');
@@ -118,6 +127,30 @@ export function mountKeybar(container: HTMLElement, handlers: {
     button.addEventListener('pointerdown', event => event.preventDefault());
     if (onClick) button.addEventListener('click', onClick);
     return button;
+  };
+
+  const makeMiniButton = (label: string, title: string, onClick: () => void): HTMLButtonElement => {
+    const button = makeButton(label, onClick);
+    button.classList.add('keybar-mini-btn');
+    button.title = title;
+    button.setAttribute('aria-label', title);
+    return button;
+  };
+
+  const setButtonContent = (button: HTMLButtonElement, spec: KeySpec) => {
+    const text = keyButtonText(spec);
+    button.replaceChildren();
+    if (text.icon) {
+      const icon = document.createElement('span');
+      icon.className = 'keybar-btn-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = text.icon;
+      button.append(icon);
+    }
+    const label = document.createElement('span');
+    label.className = 'keybar-btn-label';
+    label.textContent = text.label;
+    button.append(label);
   };
 
   const registerModifier = (name: ModifierName, button: HTMLButtonElement) => {
@@ -141,19 +174,26 @@ export function mountKeybar(container: HTMLElement, handlers: {
     }
   };
 
-  const makeKeyButton = (spec: ButtonSpec) => {
+  const makeKeyButton = (spec: KeySpec) => {
     const activate = () => {
       handlers.onKey(spec.key);
       refresh();
     };
     const repeatable = isRepeatableKey(spec.key);
     const button = makeButton(spec.label, repeatable ? undefined : activate);
+    setButtonContent(button, spec);
+    button.title = spec.title;
+    button.setAttribute('aria-label', spec.title);
+    button.dataset.keyId = spec.id;
+    button.dataset.category = spec.category;
     if (repeatable) {
       button.classList.add('keybar-btn-arrow');
-      cancelRepeats.push(bindPressRepeat(button, activate));
+      cancelRenderedRepeats.push(bindPressRepeat(button, activate));
+    }
+    if (spec.wide) {
+      button.classList.add('keybar-btn-wide');
     }
     if (spec.key.kind === 'backtab') {
-      button.classList.add('keybar-btn-wide');
       button.setAttribute('aria-label', 'Shift Tab — send back-tab');
       button.title = 'Shift Tab — send back-tab';
     }
@@ -164,12 +204,98 @@ export function mountKeybar(container: HTMLElement, handlers: {
   const strip = document.createElement('div');
   strip.className = 'keybar-strip';
   strip.setAttribute('aria-label', 'Quick terminal keys');
-  strip.append(...KEYS.map(makeKeyButton));
 
   const controls = document.createElement('div');
   controls.className = 'keybar-controls';
 
   let moreButton: HTMLButtonElement;
+  let settingsButton: HTMLButtonElement;
+
+  const cancelAllRepeats = () => {
+    for (const cancel of cancelRepeats) cancel();
+    for (const cancel of cancelRenderedRepeats) cancel();
+  };
+
+  const clearRenderedKeyControls = () => {
+    for (const cancel of cancelRenderedRepeats) cancel();
+    cancelRenderedRepeats = [];
+    modifierButtons.clear();
+  };
+
+  const orderedCatalog = () => resolveKeySpecs(preferences.order);
+
+  const applyPreferences = (next: KeybarPreferences) => {
+    preferences = next;
+    saveKeybarPreferences(preferences);
+    render();
+  };
+
+  const makeCustomizePanel = (): HTMLElement => {
+    const hidden = new Set(preferences.hidden);
+    const panel = document.createElement('div');
+    panel.className = 'keybar-customize';
+
+    const title = document.createElement('div');
+    title.className = 'keybar-customize-title';
+    title.textContent = 'Customize keys';
+    panel.append(title);
+
+    for (const spec of orderedCatalog()) {
+      const row = document.createElement('div');
+      row.className = 'keybar-customize-row';
+      row.dataset.category = spec.category;
+
+      const name = document.createElement('label');
+      name.className = 'keybar-customize-name';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = !hidden.has(spec.id);
+      checkbox.addEventListener('pointerdown', event => event.preventDefault());
+      checkbox.addEventListener('change', () => {
+        applyPreferences(setKeyHidden(preferences, spec.id, !checkbox.checked));
+      });
+
+      const label = document.createElement('span');
+      label.textContent = `${spec.label} · ${spec.title}`;
+      name.append(checkbox, label);
+
+      const previous = makeMiniButton('←', `Move ${spec.label} earlier`, () => {
+        applyPreferences(moveKey(preferences, spec.id, -1));
+      });
+      const next = makeMiniButton('→', `Move ${spec.label} later`, () => {
+        applyPreferences(moveKey(preferences, spec.id, 1));
+      });
+
+      row.append(name, previous, next);
+      panel.append(row);
+    }
+
+    const reset = makeButton('Reset', () => {
+      applyPreferences(resetKeybarPreferences());
+    });
+    reset.classList.add('keybar-reset-btn');
+    reset.setAttribute('aria-label', 'Reset terminal keys');
+    reset.title = 'Reset terminal keys';
+    panel.append(reset);
+    return panel;
+  };
+
+  function render(): void {
+    clearRenderedKeyControls();
+    const visibleKeys = resolveKeySpecs(visibleKeyIds(preferences));
+    const children: HTMLElement[] = visibleKeys.map(makeKeyButton);
+    if (customizing) children.push(makeCustomizePanel());
+    strip.replaceChildren(...children);
+    if (settingsButton) {
+      const label = keybarSettingsLabel(customizing);
+      settingsButton.classList.toggle('active', customizing);
+      settingsButton.setAttribute('aria-label', label);
+      settingsButton.setAttribute('aria-expanded', String(customizing));
+      settingsButton.title = label;
+    }
+    refresh();
+  }
 
   const updateView = () => {
     const occupiesLayout = surface.mode !== 'collapsed';
@@ -190,6 +316,7 @@ export function mountKeybar(container: HTMLElement, handlers: {
     moreButton.classList.toggle('active', expanded);
     moreButton.setAttribute('aria-expanded', String(expanded));
     moreButton.disabled = restoring;
+    settingsButton.disabled = restoring;
   };
 
   const clearTransitionTimer = () => {
@@ -218,6 +345,8 @@ export function mountKeybar(container: HTMLElement, handlers: {
     );
     updateView();
     finishTransitionAfterTimeout();
+    customizing = false;
+    render();
     // ต้องอยู่ใน click gesture เดิม ไม่งั้น mobile browser จะปฏิเสธการเปิด IME
     handlers.onOpenKeyboard();
   };
@@ -232,6 +361,8 @@ export function mountKeybar(container: HTMLElement, handlers: {
       surface = closeSurface(surface);
       updateView();
       handlers.onPanelChange(false);
+      customizing = false;
+      render();
       return;
     }
 
@@ -256,6 +387,30 @@ export function mountKeybar(container: HTMLElement, handlers: {
   moreButton.setAttribute('aria-label', 'แสดง/ซ่อนปุ่มทั้งหมด');
   moreButton.setAttribute('aria-expanded', 'false');
 
+  settingsButton = makeButton('⚙', () => {
+    customizing = !customizing;
+    if (customizing && surface.mode === 'collapsed') {
+      const viewport = handlers.viewport();
+      const startingPanelHeight = viewport.keyboardVisible
+        ? parseFloat(getComputedStyle(container).marginBottom) || 0
+        : 0;
+      surface = beginExpansion(
+        surface,
+        viewport.keyboardVisible,
+        viewport.visualHeight,
+        startingPanelHeight,
+      );
+      updateView();
+      handlers.onRequestKeyboardClose();
+      handlers.onPanelChange(true);
+      if (surface.mode === 'replacing-ime') finishTransitionAfterTimeout();
+    }
+    render();
+  });
+  settingsButton.title = keybarSettingsLabel(false);
+  settingsButton.setAttribute('aria-label', keybarSettingsLabel(false));
+  settingsButton.setAttribute('aria-expanded', 'false');
+
   const keyboardButton = makeButton('⌨', () => {
     const restoringPanel = surface.mode !== 'collapsed';
     if (restoringPanel) {
@@ -266,17 +421,17 @@ export function mountKeybar(container: HTMLElement, handlers: {
   });
   keyboardButton.title = 'เปิด/ปิดคีย์บอร์ด';
   keyboardButton.setAttribute('aria-label', 'เปิด/ปิดคีย์บอร์ด');
-  controls.append(moreButton, keyboardButton);
+  controls.append(moreButton, settingsButton, keyboardButton);
 
   const row = document.createElement('div');
   row.className = 'keybar-row';
   row.append(strip, controls);
   container.replaceChildren(row);
-  window.addEventListener('blur', () => cancelRepeats.forEach(cancel => cancel()));
+  window.addEventListener('blur', cancelAllRepeats);
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) cancelRepeats.forEach(cancel => cancel());
+    if (document.hidden) cancelAllRepeats();
   });
-  refresh();
+  render();
 
   return {
     refresh,
@@ -291,6 +446,8 @@ export function mountKeybar(container: HTMLElement, handlers: {
       surface = closeSurface(surface);
       updateView();
       handlers.onPanelChange(false);
+      customizing = false;
+      render();
     },
     onViewportFrame(visualHeight: number) {
       const next = updateVisualHeight(surface, visualHeight);

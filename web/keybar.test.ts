@@ -5,10 +5,15 @@ import {
   foldAction,
   isRepeatableKey,
   KEYS,
+  keyButtonText,
+  keybarSettingsLabel,
+  keybarVisibleLabels,
   keybarViewState,
   modifierPresentation,
 } from './keybar.js';
 import { beginExpansion, initialKeyboardSurface } from './keyboard-surface.js';
+import { getKeySpec } from './key-definitions.js';
+import { defaultKeybarPreferences, moveKey, setKeyHidden } from './keybar-preferences.js';
 
 describe('shared key inventory', () => {
   it('has the exact quick-row and expanded-grid order without duplicates', () => {
@@ -78,5 +83,27 @@ describe('modifier presentation', () => {
     ['locked', true, true, 'Ctrl locked'],
   ] as const)('maps %s to visual and accessibility state', (mode, pressed, locked, label) => {
     expect(modifierPresentation('Ctrl', mode)).toEqual({ pressed, locked, label });
+  });
+});
+
+describe('keybar customization state', () => {
+  it('reports visible labels after hide and reorder preferences', () => {
+    const hidden = setKeyHidden(defaultKeybarPreferences(), 'tab', true);
+    const moved = moveKey(hidden, 'dash', -1);
+    expect(keybarVisibleLabels(moved)).not.toContain('Tab');
+    expect(keybarVisibleLabels(moved).at(-2)).toBe('-');
+  });
+
+  it('labels the settings toggle by panel state', () => {
+    expect(keybarSettingsLabel(false)).toBe('Customize terminal keys');
+    expect(keybarSettingsLabel(true)).toBe('Close key customization');
+  });
+
+  it('uses compact icon-aware button text when available', () => {
+    expect(keyButtonText(getKeySpec('esc')!)).toEqual({ icon: '⎋', label: 'Esc' });
+    expect(keyButtonText(getKeySpec('tab')!)).toEqual({ icon: null, label: 'Tab' });
+    expect(keyButtonText(getKeySpec('shift-tab')!)).toEqual({ icon: null, label: 'Shift Tab' });
+    expect(keyButtonText(getKeySpec('interrupt')!)).toEqual({ icon: null, label: '^C' });
+    expect(keyButtonText(getKeySpec('dash')!)).toEqual({ icon: null, label: '-' });
   });
 });

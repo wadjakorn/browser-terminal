@@ -57,8 +57,11 @@ html, body {
 
 .keybar {
   flex: none;
-  background: #17171d;
-  border-top: 1px solid #2a2a33;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,0)),
+    #15151c;
+  border-top: 1px solid #2e2e3a;
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, .28);
 }
 
 /* บาง mobile browser รายงานขอบ visual viewport ชิด/ล้ำเข้า keyboard accessory
@@ -113,26 +116,58 @@ html, body {
   flex: none;
   align-self: flex-start;
   gap: .25rem;
-  padding-left: .25rem;
-  border-left: 1px solid #33333f;
-  background: #17171d;
+  padding-left: .3rem;
+  border-left: 1px solid #343442;
+  background: linear-gradient(90deg, rgba(21,21,28,0), #15151c 20%);
   margin-left: auto;
 }
 
 .keybar-btn {
   flex: 0 0 2.75rem;
   min-width: 2.75rem;
-  max-width: 4rem;        /* กันปุ่มบานเป็นแผ่นป้ายบนแท็บเล็ต */
+  max-width: 4.25rem;        /* กันปุ่มบานเป็นแผ่นป้ายบนแท็บเล็ต */
   min-height: 2.75rem;
-  padding: 0;
-  border-radius: .5rem; border: 1px solid #33333f;
-  background: #21212a; color: var(--fg);
-  font-size: .95rem; font-family: ui-monospace, monospace;
+  padding: 0 .15rem;
+  display: inline-grid;
+  grid-auto-flow: row;
+  place-items: center;
+  align-content: center;
+  gap: .05rem;
+  border-radius: .7rem; border: 1px solid #343443;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,0)),
+    #22222c;
+  color: var(--fg);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.25);
+  font-size: .86rem; font-family: ui-monospace, monospace;
   white-space: nowrap;
   touch-action: manipulation;
 }
-.keybar-btn.active { background: var(--accent); color: #04121f; border-color: var(--accent); }
+.keybar-btn:active {
+  transform: translateY(1px);
+  background: #292938;
+}
+.keybar-btn.active {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,0)),
+    var(--accent);
+  color: #04121f;
+  border-color: #9cc4ff;
+}
 .keybar-btn-wide { flex-basis: 4.5rem; max-width: 4.5rem; font-size: .8rem; }
+
+.keybar-btn-icon {
+  display: inline-grid;
+  place-items: center;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.keybar-btn-label {
+  display: inline-grid;
+  place-items: center;
+  line-height: 1;
+}
 
 .keybar-strip .keybar-btn-arrow {
   touch-action: pan-x;
@@ -141,14 +176,101 @@ html, body {
   -webkit-touch-callout: none;
 }
 
+.keybar-btn-arrow .keybar-btn-label {
+  width: .82rem;
+  height: .82rem;
+  font-size: 0;
+  border-block-start: .16rem solid currentColor;
+  border-inline-end: .16rem solid currentColor;
+  border-radius: .06rem;
+}
+
+.keybar-btn[data-key-id="arrow-up"] .keybar-btn-label {
+  transform: translateY(.12rem) rotate(-45deg);
+}
+
+.keybar-btn[data-key-id="arrow-down"] .keybar-btn-label {
+  transform: translateY(-.12rem) rotate(135deg);
+}
+
+.keybar-btn[data-key-id="arrow-left"] .keybar-btn-label {
+  transform: translateX(.12rem) rotate(-135deg);
+}
+
+.keybar-btn[data-key-id="arrow-right"] .keybar-btn-label {
+  transform: translateX(-.12rem) rotate(45deg);
+}
+
 .keybar-strip.expanded .keybar-btn-arrow { touch-action: manipulation; }
 
 .keybar-btn.locked { position: relative; }
 .keybar-btn.locked::after {
-  content: '🔒';
+  content: '';
   position: absolute;
-  top: .05rem;
-  right: .12rem;
-  font-size: .55rem;
-  line-height: 1;
+  top: .28rem;
+  right: .28rem;
+  width: .42rem;
+  height: .42rem;
+  border-radius: 999px;
+  background: #04121f;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.35);
+}
+
+.keybar-customize {
+  flex: 1 0 100%;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .35rem;
+  padding: .35rem 0 .1rem;
+}
+
+.keybar-customize-title {
+  color: #a9a9b8;
+  font-size: .75rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: 0 .1rem;
+}
+
+.keybar-customize-row {
+  display: grid;
+  grid-template-columns: minmax(5rem, 1fr) auto auto;
+  gap: .3rem;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: .25rem;
+  border: 1px solid #2b2b35;
+  border-radius: .65rem;
+  background: #1b1b23;
+}
+
+.keybar-customize-name {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: .82rem ui-monospace, monospace;
+}
+
+.keybar-customize-name input {
+  flex: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  accent-color: var(--accent);
+}
+
+.keybar-mini-btn {
+  flex-basis: 2.25rem;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  border-radius: .45rem;
+}
+
+.keybar-reset-btn {
+  justify-self: start;
+  min-width: 5.5rem;
+  max-width: 7rem;
 }

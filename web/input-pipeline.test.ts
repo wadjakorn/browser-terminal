@@ -163,4 +163,19 @@ describe('non-character inputs', () => {
     pipeline.onBarKey(lit('/'));
     expect(sent).toEqual([[0x3f]]);
   });
+
+  it('toolbar navigation and editing sequences pass through and consume armed modifiers only', () => {
+    pipeline.onBarKey(modifier('shift'), 0);
+    pipeline.onBarKey(lit('\x1b[5~'));
+    expect(sent).toEqual([bytes('\x1b[5~')]);
+    expect(pipeline.modifierState().shift).toBe('off');
+  });
+
+  it('dedicated Ctrl shortcut literals send their control byte without needing sticky Ctrl', () => {
+    pipeline.onBarKey(lit('\x1a'));
+    pipeline.onBarKey(lit('\x18'));
+    pipeline.onBarKey(lit('\x12'));
+    pipeline.onBarKey(lit('\x06'));
+    expect(sent).toEqual([[0x1a], [0x18], [0x12], [0x06]]);
+  });
 });

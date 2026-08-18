@@ -2,6 +2,14 @@ import type { BarKey } from './input-pipeline.js';
 
 export type KeyCategory = 'core' | 'navigation' | 'editing' | 'symbols' | 'function' | 'ctrl';
 
+/**
+ * งานของปุ่มที่ "ไม่ใช่การส่งไบต์เข้า terminal"
+ *
+ * แยกออกจาก BarKey โดยตั้งใจ: BarKey คือเส้นทางไบต์ที่ถือว่า security-critical
+ * มันไม่ควรรู้จักโหมดของ UI เลย ปุ่มที่มี action จะไม่ผ่าน input-pipeline
+ */
+export type KeyAction = 'select-mode' | 'paste';
+
 export interface KeySpec {
   id: string;
   label: string;
@@ -9,7 +17,11 @@ export interface KeySpec {
   icon?: string;
   title: string;
   category: KeyCategory;
-  key: BarKey;
+  /** ปุ่มหนึ่งมีได้อย่างใดอย่างหนึ่งระหว่าง key กับ action เท่านั้น */
+  key?: BarKey;
+  action?: KeyAction;
+  /** ปุ่มที่มีสถานะติด/ดับ — keybar จะถามสถานะมาทาสี */
+  toggle?: boolean;
   defaultVisible: boolean;
   defaultOrder: number;
   repeatable?: boolean;
@@ -73,6 +85,14 @@ export const KEY_CATALOG: readonly KeySpec[] = [
   { id: 'shift', label: 'Shift', title: 'Shift modifier', category: 'core', key: { kind: 'modifier', name: 'shift' }, defaultVisible: true, defaultOrder: 90 },
   { id: 'alt', label: 'Alt', title: 'Alt modifier', category: 'core', key: { kind: 'modifier', name: 'alt' }, defaultVisible: true, defaultOrder: 100 },
   { id: 'interrupt', label: '^C', title: 'Interrupt — send Ctrl+C', category: 'core', key: { kind: 'interrupt' }, defaultVisible: true, defaultOrder: 110 },
+  {
+    id: 'select', label: '⧉', title: 'Select text — highlight and copy', category: 'core',
+    action: 'select-mode', toggle: true, defaultVisible: true, defaultOrder: 115,
+  },
+  {
+    id: 'paste', label: '⎘', title: 'Paste from clipboard', category: 'core',
+    action: 'paste', defaultVisible: true, defaultOrder: 117,
+  },
   { id: 'pipe', label: '|', title: 'Pipe', category: 'symbols', key: { kind: 'literal', data: '|' }, defaultVisible: true, defaultOrder: 120 },
   { id: 'tilde', label: '~', title: 'Tilde', category: 'symbols', key: { kind: 'literal', data: '~' }, defaultVisible: true, defaultOrder: 130 },
   { id: 'slash', label: '/', title: 'Slash', category: 'symbols', key: { kind: 'literal', data: '/' }, defaultVisible: true, defaultOrder: 140 },
@@ -160,6 +180,11 @@ export function resolveKeySpecs(ids: readonly string[]): KeySpec[] {
   });
 }
 
-export function isRepeatableKey(key: BarKey): boolean {
-  return key.kind === 'literal' && REPEATABLE_CURSOR_SEQUENCES.has(key.data);
+export function isRepeatableKey(key: BarKey | undefined): boolean {
+  return key?.kind === 'literal' && REPEATABLE_CURSOR_SEQUENCES.has(key.data);
+}
+
+/** ลำดับเริ่มต้นของ id — ใช้ตอนแทรกปุ่มใหม่เข้าไปในลำดับที่ผู้ใช้จัดไว้แล้ว */
+export function defaultOrderOf(id: string): number {
+  return KEY_BY_ID.get(id)?.defaultOrder ?? Number.MAX_SAFE_INTEGER;
 }

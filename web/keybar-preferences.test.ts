@@ -10,6 +10,7 @@ import {
   setKeyHidden,
   visibleKeyIds,
 } from './keybar-preferences.js';
+import { ALL_KEY_IDS } from './key-definitions.js';
 
 function memoryStorage(): Storage {
   const data = new Map<string, string>();
@@ -27,12 +28,12 @@ describe('keybar preferences', () => {
   it('starts from the legacy quick-row defaults', () => {
     expect(defaultKeybarPreferences()).toEqual({
       version: 1,
-      order: expect.arrayContaining(['esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'shift-tab', 'shift', 'alt', 'interrupt', 'pipe', 'tilde', 'slash', 'dash', 'page-up', 'delete', 'f12', 'ctrl-z']),
+      order: expect.arrayContaining(['esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'shift-tab', 'shift', 'alt', 'interrupt', 'select', 'paste', 'pipe', 'tilde', 'slash', 'dash', 'page-up', 'delete', 'f12', 'ctrl-z']),
       hidden: expect.arrayContaining(['page-up', 'delete', 'f12', 'ctrl-z']),
     });
-    expect(visibleKeyIds(defaultKeybarPreferences()).slice(0, 15)).toEqual([
+    expect(visibleKeyIds(defaultKeybarPreferences()).slice(0, 17)).toEqual([
       'esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
-      'shift-tab', 'shift', 'alt', 'interrupt', 'pipe', 'tilde', 'slash', 'dash',
+      'shift-tab', 'shift', 'alt', 'interrupt', 'select', 'paste', 'pipe', 'tilde', 'slash', 'dash',
     ]);
   });
 
@@ -46,6 +47,33 @@ describe('keybar preferences', () => {
     expect(normalized.order).toContain('page-up');
     expect(normalized.order).toContain('ctrl-z');
     expect(normalized.hidden).toEqual(['dash']);
+  });
+
+  it('แทรก id ที่ยังไม่รู้จักตามตำแหน่ง defaultOrder ไม่ใช่ต่อท้าย', () => {
+    // ผู้ใช้เดิมมีลำดับที่เก็บไว้ครบทุก id เก่า ถ้าต่อท้ายเฉยๆ ปุ่มใหม่จะไปอยู่หลัง
+    // F1-F12 และ Ctrl shortcuts ทั้งหมด คือลึกจนหาไม่เจอ
+    const legacy = ALL_KEY_IDS.filter(id => id !== 'select' && id !== 'paste');
+    const normalized = normalizeKeybarPreferences({ version: 1, order: [...legacy], hidden: [] });
+
+    expect(normalized.order.indexOf('select')).toBe(normalized.order.indexOf('interrupt') + 1);
+    expect(normalized.order.indexOf('paste')).toBe(normalized.order.indexOf('select') + 1);
+    expect(normalized.order.indexOf('paste')).toBeLessThan(normalized.order.indexOf('pipe'));
+  });
+
+  it('ลำดับที่ผู้ใช้จัดเองไม่ถูกรื้อ แทรกเฉพาะ id ใหม่', () => {
+    // ลำดับ *สัมพัทธ์* ของ id ที่บันทึกไว้ต้องไม่เปลี่ยน แม้ id ใหม่จะแทรกคั่นเข้ามา
+    const rearranged = ['dash', 'esc', 'tab'];
+    const normalized = normalizeKeybarPreferences({ version: 1, order: rearranged, hidden: [] });
+
+    expect(normalized.order.filter(id => rearranged.includes(id))).toEqual(rearranged);
+    expect(normalized.order).toContain('select');
+  });
+
+  it('ปุ่มใหม่มองเห็นได้สำหรับผู้ใช้เดิม เพราะไม่อยู่ใน hidden ที่บันทึกไว้', () => {
+    const legacy = ALL_KEY_IDS.filter(id => id !== 'select' && id !== 'paste');
+    const normalized = normalizeKeybarPreferences({ version: 1, order: [...legacy], hidden: ['f12'] });
+    expect(visibleKeyIds(normalized)).toContain('select');
+    expect(visibleKeyIds(normalized)).toContain('paste');
   });
 
   it('moves visible keys without dropping hidden state', () => {

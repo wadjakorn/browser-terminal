@@ -20,7 +20,7 @@ describe('shared key inventory', () => {
     const labels = KEYS.map(key => key.label);
     expect(labels).toEqual([
       'Esc', 'Tab', 'Ctrl', '↑', '↓', '←', '→', 'Shift Tab', 'Shift',
-      'Alt', '^C', '|', '~', '/', '-',
+      'Alt', '^C', '⧉', '⎘', '|', '~', '/', '-',
     ]);
     expect(new Set(labels).size).toBe(labels.length);
     expect(labels).not.toContain('⇄');

@@ -5,6 +5,7 @@ import {
   KEY_TARGET_PX,
   isRepeatableKey,
   resolveKeySpecs,
+  type KeyAction,
   type KeySpec,
 } from './key-definitions.js';
 import {
@@ -103,6 +104,8 @@ export interface MountedKeybar {
 
 export function mountKeybar(container: HTMLElement, handlers: {
   onKey: (key: BarKey) => void;
+  onAction: (action: KeyAction) => void;
+  actionState: (action: KeyAction) => boolean;
   modifierState: () => ModifierState;
   onToggleKeyboard: () => void;
   onOpenKeyboard: () => void;
@@ -116,6 +119,7 @@ export function mountKeybar(container: HTMLElement, handlers: {
   let preferences: KeybarPreferences = loadKeybarPreferences();
   let customizing = false;
   const modifierButtons = new Map<ModifierName, HTMLButtonElement[]>();
+  const toggleButtons = new Map<KeyAction, HTMLButtonElement[]>();
   const cancelRepeats: Array<() => void> = [];
   let cancelRenderedRepeats: Array<() => void> = [];
 
@@ -153,6 +157,12 @@ export function mountKeybar(container: HTMLElement, handlers: {
     button.append(label);
   };
 
+  const registerToggle = (action: KeyAction, button: HTMLButtonElement) => {
+    const buttons = toggleButtons.get(action) ?? [];
+    buttons.push(button);
+    toggleButtons.set(action, buttons);
+  };
+
   const registerModifier = (name: ModifierName, button: HTMLButtonElement) => {
     const buttons = modifierButtons.get(name) ?? [];
     buttons.push(button);
@@ -160,6 +170,16 @@ export function mountKeybar(container: HTMLElement, handlers: {
   };
 
   const refresh = () => {
+    for (const [action, buttons] of toggleButtons) {
+      const on = handlers.actionState(action);
+      for (const button of buttons) {
+        // ใช้คลาสเดียวกับ modifier ที่ล็อกอยู่ เพื่อให้ "ติดอยู่" หน้าตาเหมือนกันทั้งแถบ
+        button.classList.toggle('active', on);
+        button.classList.toggle('locked', on);
+        button.setAttribute('aria-pressed', String(on));
+      }
+    }
+
     const state = handlers.modifierState();
     for (const [name, buttons] of modifierButtons) {
       const label = name === 'ctrl' ? 'Ctrl' : name === 'shift' ? 'Shift' : 'Alt';
@@ -176,7 +196,8 @@ export function mountKeybar(container: HTMLElement, handlers: {
 
   const makeKeyButton = (spec: KeySpec) => {
     const activate = () => {
-      handlers.onKey(spec.key);
+      if (spec.action) handlers.onAction(spec.action);
+      else if (spec.key) handlers.onKey(spec.key);
       refresh();
     };
     const repeatable = isRepeatableKey(spec.key);
@@ -193,11 +214,12 @@ export function mountKeybar(container: HTMLElement, handlers: {
     if (spec.wide) {
       button.classList.add('keybar-btn-wide');
     }
-    if (spec.key.kind === 'backtab') {
+    if (spec.key?.kind === 'backtab') {
       button.setAttribute('aria-label', 'Shift Tab — send back-tab');
       button.title = 'Shift Tab — send back-tab';
     }
-    if (spec.key.kind === 'modifier') registerModifier(spec.key.name, button);
+    if (spec.key?.kind === 'modifier') registerModifier(spec.key.name, button);
+    if (spec.toggle && spec.action) registerToggle(spec.action, button);
     return button;
   };
 

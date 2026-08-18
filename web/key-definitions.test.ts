@@ -14,14 +14,34 @@ describe('key catalog', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(DEFAULT_KEY_IDS).toEqual([
       'esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
-      'shift-tab', 'shift', 'alt', 'interrupt', 'pipe', 'tilde', 'slash', 'dash',
+      'shift-tab', 'shift', 'alt', 'interrupt', 'select', 'paste', 'pipe', 'tilde', 'slash', 'dash',
     ]);
     expect(ALL_KEY_IDS.slice(0, DEFAULT_KEY_IDS.length)).toEqual(DEFAULT_KEY_IDS);
     expect(ALL_KEY_IDS).toEqual(KEY_CATALOG.map(key => key.id));
     expect(resolveKeySpecs(DEFAULT_KEY_IDS).map(key => key.label)).toEqual([
       'Esc', 'Tab', 'Ctrl', '↑', '↓', '←', '→', 'Shift Tab', 'Shift',
-      'Alt', '^C', '|', '~', '/', '-',
+      'Alt', '^C', '⧉', '⎘', '|', '~', '/', '-',
     ]);
+  });
+
+  it('ทุกปุ่มมี key หรือ action อย่างใดอย่างหนึ่ง ไม่ใช่ทั้งคู่และไม่ใช่ไม่มีเลย', () => {
+    // guard นี้ดักปุ่มที่จะเพิ่มในอนาคตซึ่งเผลอใส่ทั้งสองอย่าง — ปุ่มแบบนั้นจะทั้ง
+    // ส่งไบต์เข้า terminal และสั่งงาน UI พร้อมกัน ซึ่งไม่มีใครตั้งใจ
+    for (const spec of KEY_CATALOG) {
+      expect([spec.key !== undefined, spec.action !== undefined].filter(Boolean)).toHaveLength(1);
+    }
+  });
+
+  it('ปุ่ม action ไม่ถูกนับเป็นปุ่มกดค้างซ้ำ', () => {
+    expect(isRepeatableKey(getKeySpec('select')!.key)).toBe(false);
+    expect(isRepeatableKey(getKeySpec('paste')!.key)).toBe(false);
+  });
+
+  it('ปุ่มเลือกข้อความและวางเป็น action ไม่ใช่ไบต์ และเห็นตั้งแต่แรก', () => {
+    expect(getKeySpec('select')).toMatchObject({ action: 'select-mode', toggle: true, defaultVisible: true });
+    expect(getKeySpec('paste')).toMatchObject({ action: 'paste', defaultVisible: true });
+    expect(getKeySpec('select')!.key).toBeUndefined();
+    expect(getKeySpec('paste')!.key).toBeUndefined();
   });
 
   it('marks exactly the four arrow keys repeatable', () => {

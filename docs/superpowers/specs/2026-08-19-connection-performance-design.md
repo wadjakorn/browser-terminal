@@ -71,19 +71,28 @@ node-pty มี `pause()` / `resume()` ให้อยู่แล้ว (`node-
 
 ### 3. Backpressure
 
-หลัง flush ทุกครั้ง ตรวจไบต์ที่ส่งเข้า ws แล้วแต่ยังไม่ถูกเขียนลง socket (`outstanding`):
+ตรวจไบต์ที่ยังไม่ถูกเขียนลง socket ตั้งแต่ตอน**ของเข้าคิว** ไม่ใช่รอ flush เสร็จ
+ก่อน — คือ `outstanding` (ส่งเข้า `sink.send` แล้วแต่ยัง unflushed) บวกกับไบต์ที่
+สะสมรอหน้าต่างปิดอยู่ (`pendingBytes`) รวมกัน:
 
 - เกิน **HIGH = 32 KB** → `term.pause()` หยุดอ่านจาก PTY จริง ซึ่งจะไป block
   โปรแกรมที่พ่น output ผ่าน pipe buffer ของ OS — พฤติกรรมเดียวกับเทอร์มินัลจริง
-  ที่เลื่อนจอตามไม่ทัน
+  ที่เลื่อนจอตามไม่ทัน เช็คตั้งแต่ `push()` เพราะหนึ่งหน้าต่างรวม chunk เดียว
+  สะสมเกินเพดานได้หลายเท่าก่อนถึง `sink.send` จริง (วัดได้ 275 KB ในหน้าต่าง 5 ms
+  เดียวจาก `yes | head -200000`) รอเช็คหลัง flush จึงไม่ทันกันคิวพุ่งเกิน
 - ลงต่ำกว่า **LOW = 8 KB** → `term.resume()`
 - **ไม่ poll** — `ws.send(data, cb)` เรียก callback เมื่อข้อมูลถูกเขียนลง socket จริง
   จึงนับ `outstanding` เองแบบ event-driven ได้ ไม่ต้องมี interval ให้เคลียร์เลย
-- `dispose` เคลียร์ cooldown timer และตั้งธง `disposed` เพื่อไม่ให้ callback ที่มา
-  ทีหลัง resume PTY ที่ถูกฆ่าไปแล้ว
+- `dispose` เคลียร์ cooldown timer, ตั้งธง `disposed` เพื่อไม่ให้ callback ที่มา
+  ทีหลัง resume PTY ที่ถูกฆ่าไปแล้ว และถ้ากำลัง pause อยู่ต้อง resume ต้นทางก่อน
+  ปิด — node-pty ไม่ยิง `exit` จนกว่า socket ของ PTY จะ close และถ้า socket ถูก
+  pause ค้างไว้ EOF จะไม่ถูกอ่าน ต้องรอ `DESTROY_SOCKET_TIMEOUT_MS` (200ms ใน
+  node-pty) ก่อนถูก destroy ทิ้งพร้อมข้อมูลที่ค้างอยู่
 
 นี่คือส่วนที่แก้อาการ "พิมพ์แล้วหน่วงเป็นวินาทีตอนมี output ค้าง" เพราะคิวถูก
-จำกัดไม่ให้ยาวเกิน ~32 KB (≈ หนึ่ง RTT) แทนที่จะโตได้ไม่จำกัด
+จำกัดไม่ให้ยาวเกิน ~32 KB แทนที่จะโตได้ไม่จำกัด — ตัวเลขนี้นับไบต์**ก่อนบีบอัด**
+ดังนั้นจึงเป็นเพดานแบบ conservative เท่านั้น คิวจริงที่วิ่งบนสายเล็กกว่านี้ตาม
+อัตราการบีบของ deflate (ข้อความเทอร์มินัลมักบีบได้ 5-10 เท่า)
 
 ### ค่าคงที่
 
@@ -91,8 +100,9 @@ node-pty มี `pause()` / `resume()` ให้อยู่แล้ว (`node-
 |-----|---------|--------|
 | cooldown window | 5 ms | เล็กพอที่ RTT 150 ms กลบมิด ใหญ่พอที่จะยุบ burst |
 | deflate threshold | 1 KB | กัน echo frame จิ๋วไม่ให้เสียเวลา deflate |
-| outstanding HIGH | 32 KB | ≈ 130 ms ≈ หนึ่ง RTT บน cellular — ใหญ่กว่านี้คือยอมให้ echo ช้าเป็นวินาที |
+| outstanding HIGH | 32 KB | เพดานนับไบต์ก่อนบีบอัด (conservative) — ใหญ่กว่านี้คือยอมให้ echo ช้าเป็นวินาที |
 | outstanding LOW | 8 KB | hysteresis กัน pause/resume กระพริบ |
+| maxPayload (ขาเข้า) | 256 KB | ผูกกับการเปิด deflate — กัน amplification ตอน inflate เฟรมจากไคลเอนต์ |
 
 ทั้งหมดปรับได้หลังวัดจริง
 

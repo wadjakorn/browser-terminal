@@ -29,6 +29,8 @@ Browser Terminal is a security-sensitive TypeScript web terminal optimized for m
 - Preserve the mobile interaction contract documented in `README.md`, especially explicit keyboard toggling, sticky modifiers, touch gestures, and responsive keybar pagination.
 - Keep `web/keybar.ts` layout constants synchronized with the corresponding CSS values in `web/style.css`.
 - Do not use `@xterm/addon-attach`; terminal input must pass through `web/input-pipeline.ts`.
+- Do not add `@xterm/addon-canvas` or `@xterm/addon-webgl`. The DOM renderer is what makes the block-shaped selection highlight and the result sheet's native hold-to-select work.
+- Text selection drives xterm through synthetic mouse events. Their flags live in `selectionMouseInit()` (`web/text-selection.ts`) and every one of them is a condition xterm actually checks — dropping any single flag fails silently with no error. See the pitfalls section in `README.md` before changing them.
 - Add or update focused Vitest coverage for behavioral changes.
 - Before considering a change complete, run `pnpm test` and `pnpm build` unless the change is documentation-only.
 - Keep changes scoped and do not overwrite unrelated work in a dirty worktree.

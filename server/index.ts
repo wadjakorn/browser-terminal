@@ -124,7 +124,15 @@ export function createServer(cfg: Config) {
     res.writeHead(405).end('method not allowed');
   });
 
-  const wss = new WebSocketServer({ noServer: true });
+  // เปิดบีบอัดเฉพาะ frame ใหญ่ ข้อความเทอร์มินัลมี escape sequence ซ้ำสูงมาก
+  // บีบได้ 5-10 เท่า ซึ่งบนแบนด์วิดท์มือถือคือของจริง
+  //
+  // threshold กัน frame จิ๋วไว้: echo ของตัวอักษรที่ผู้ใช้พิมพ์ยาวไม่กี่ไบต์
+  // การ deflate มันมีแต่เสียเวลา CPU และบวก latency ให้สิ่งที่ต้องเร็วที่สุด
+  //
+  // คง context takeover ไว้ (ค่า default) — dictionary ข้ามเฟรมช่วยได้เยอะกับ
+  // ข้อความที่ซ้ำแบบนี้ และแอปนี้จำกัด session เดียว หน่วยความจำจึงไม่ใช่ประเด็น
+  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: { threshold: 1024 } });
 
   http.on('upgrade', (req, socket, head) => {
     const url = req.url ?? '';

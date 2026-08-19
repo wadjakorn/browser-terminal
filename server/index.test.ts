@@ -204,3 +204,20 @@ describe('POST /api/logout เพิกถอน session จริง', () => {
     }
   });
 });
+
+describe('การบีบอัด WebSocket', () => {
+  it('server ตอบรับ permessage-deflate ตอน handshake', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/pty?cols=80&rows=24`, {
+      headers: { origin: ORIGIN, cookie: goodCookie() },
+      perMessageDeflate: true,
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', () => resolve());
+      ws.once('error', reject);
+    });
+
+    // frame ใหญ่ถูกบีบ ส่วน frame เล็ก (echo) รอดเพราะ threshold ฝั่ง server
+    expect(ws.extensions).toContain('permessage-deflate');
+    ws.close();
+  });
+});

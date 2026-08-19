@@ -28,6 +28,13 @@
 
 หัวใจของงานนี้ chunk แรกหลังจอเงียบต้องออกทันทีแบบไม่หน่วงเลย (นั่นคือ echo ของการพิมพ์) chunk ที่ตามมาถี่ๆ ใน burst ถึงจะถูกยุบรวม
 
+**ทำไม coalescing ถึงคุ้ม (อย่าลบทิ้งตอนมาเก็บกวาดทีหลัง):** `ws` เรียก
+`socket.setNoDelay()` ให้ทุก connection (`node_modules/ws/lib/websocket.js:248`) แปลว่า
+**Nagle ถูกปิด** — `ws.send()` แต่ละครั้งกลายเป็น TCP segment ของตัวเองทันที node-pty
+ยิง chunk เล็กๆ ได้หลายร้อยครั้งต่อวินาที ซึ่งบนเส้นทางนี้แต่ละ segment แบก overhead
+ของ IP/TCP (~40 ไบต์) บวก WireGuard ของ Tailscale (~32 ไบต์) ทับอีกชั้น การยุบให้เหลือ
+~200 frame/วินาทีจึงลดจำนวนแพ็กเก็ตจริงลงหลายเท่า ไม่ใช่แค่ลด header ของ WebSocket
+
 **Files:**
 - Create: `server/outbound.ts`
 - Test: `server/outbound.test.ts`
@@ -598,6 +605,10 @@ import { createOutbound } from './outbound.js';
     if (ws.readyState === ws.OPEN) ws.close(1000, `exit:${exitCode}`);
   });
 ```
+
+ยืนยันแล้วว่าลำดับบนสายถูกต้อง: `ws.close()` ส่ง close frame ผ่าน `this._sender.close()`
+(`node_modules/ws/lib/websocket.js:/close(code, data)/`) ซึ่งเข้าคิวเดียวกับ data frame
+close frame จึงออกหลังข้อมูลที่ `flush()` เพิ่งใส่คิวไว้เสมอ ไม่ตัดหน้า
 
 หมายเหตุลำดับ: `flush()` ต้องมาก่อน `dispose()` เสมอ — `dispose()` ล้าง pending ทิ้ง
 ถ้าสลับกัน output บรรทัดสุดท้ายจะหายด้วยเหตุผลเดียวกับที่พยายามแก้อยู่

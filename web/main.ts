@@ -21,6 +21,15 @@ const statusEl = $('status');
 const errorEl = $('login-error');
 
 let selection: ReturnType<typeof createTextSelection> | null = null;
+/**
+ * หยุดท่าทางที่ค้างอยู่ของ recognizer — ตั้งค่าโดย bindTouch
+ *
+ * จำเป็นเพราะโหมดเลือกดักนิ้วไว้ก่อนถึง recognizer ทำให้ `onTouchStart` ไม่ถูกเรียก
+ * ซึ่งเป็นที่เดียวที่หยุด momentum ("แตะระหว่างไหลอยู่ = จับให้หยุด") ผลคือถ้าผู้ใช้
+ * สะบัดเลื่อนหาข้อความแล้วกด ⧉ ทันที momentum จะไหลต่อและยิง wheel ใส่แอปข้างในไป
+ * เรื่อยๆ จอเลื่อนหนีมือขณะกำลังลากเลือก ทั้งที่ลากอยู่กลางจอไม่ได้แตะขอบเลย
+ */
+let stopGestures: (() => void) | null = null;
 const clipboard = createClipboard();
 
 let term: Terminal | null = null;
@@ -164,6 +173,7 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     onModeChange: active => {
       el.classList.toggle('selecting', active);
       if (active) {
+        stopGestures?.();
         // Ctrl ที่ค้างอยู่จะไปยิงใส่ปุ่มถัดไปที่ไม่เกี่ยวกันเลยหลังออกจากโหมด
         pipeline.clearModifiers();
         t.blur();
@@ -442,6 +452,11 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     recognizer.onTouchCancel();
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
   });
+
+  stopGestures = () => {
+    recognizer.onTouchCancel();
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+  };
 }
 
 /**

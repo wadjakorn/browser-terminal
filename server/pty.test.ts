@@ -110,3 +110,52 @@ describe('attachPty', () => {
     await close();
   }, 15000);
 });
+
+describe('attachPty — burst ผ่านท่อ outbound', () => {
+  it('output ก้อนใหญ่มาถึงครบและเรียงถูกแม้ถูกรวม frame', async () => {
+    const { server, client, close } = await pair();
+    let received = '';
+    client.on('message', raw => { received += raw.toString('utf8'); });
+
+    attachPty(server, { shellCmd: 'bash', cols: 80, rows: 24 });
+    client.send(Buffer.from('seq 1 2000\n'));
+
+    const ok = await until(() => received.includes('\n2000'), 10_000);
+    expect(ok).toBe(true);
+
+    // bash บนเครื่องนี้เปิด bracketed-paste (ESC[?2004h/l) รอบ prompt ทุกครั้งโดย
+    // ปริยาย (ดีฟอลต์ตั้งแต่ bash 5.1) real terminal อย่าง xterm.js parse escape
+    // เหล่านี้ทิ้งเอง แต่ตรงนี้เทียบ raw byte ต่อบรรทัดตรงๆ จึงต้องตัดโค้ด ANSI
+    // และแยกบรรทัดด้วย \r เดี่ยวด้วย ไม่งั้นบรรทัดแรกที่ติดหลัง ESC จะหายไปจากการ
+    // เทียบ ทั้งที่ข้อมูลจริงมาถึงครบ — ไม่ใช่เรื่องที่ outbound เกี่ยวข้อง
+    const plain = received.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+    const numbers = plain.split(/\r\n|\r|\n/)
+      .map(line => line.trim())
+      .filter(line => /^\d+$/.test(line))
+      .map(Number);
+    const start = numbers.indexOf(1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(numbers.slice(start, start + 2000)).toEqual(
+      Array.from({ length: 2000 }, (_, i) => i + 1),
+    );
+
+    client.close();
+    await close();
+  }, 15000);
+
+  it('output บรรทัดสุดท้ายก่อน shell ตาย ไม่หายไปกับหน้าต่างรวม chunk', async () => {
+    // echo แล้ว exit ติดกันทันที — ระยะห่างระหว่าง onData กับ onExit สั้นกว่า
+    // หน้าต่าง 5 ms ถ้าไม่ flush ก่อนปิด socket บรรทัดนี้จะหายเงียบๆ
+    const { server, client, close } = await pair();
+    let received = '';
+    client.on('message', raw => { received += raw.toString('utf8'); });
+    const closed = new Promise<void>(r => client.once('close', () => r()));
+
+    attachPty(server, { shellCmd: 'bash', cols: 80, rows: 24 });
+    client.send(Buffer.from('printf FAREWELL-MARKER; exit\n'));
+
+    await closed;
+    expect(received).toContain('FAREWELL-MARKER');
+    await close();
+  }, 15000);
+});

@@ -53,6 +53,31 @@ describe('detectBorderColumns', () => {
   });
 });
 
+describe('เส้นแบ่งที่มีตัวเชื่อมกล่องปน', () => {
+  it('แถวที่เส้นแบ่งกลายเป็น ┬ ┼ ┴ ยังนับเป็นเส้นแบ่งเดียวกัน', () => {
+    // กล่องจริงของ TUI: หัวเป็น ┬ ท้ายเป็น ┴ และเส้นคั่นกลางเป็น ┼
+    // ถ้าไม่นับสามตัวนี้ 3 ใน 10 แถวจะกลายเป็น "ไม่ผ่าน" = 70% ตกเกณฑ์ 0.8 ทันที
+    const rows = Array.from({ length: 10 }, (_, i) => {
+      const mid = i === 0 ? '┬' : i === 9 ? '┴' : i === 5 ? '┼' : '│';
+      return `side${' '.repeat(6)}${mid}content`;
+    });
+    expect(detectBorderColumns(grid(rows), { rows: 10, columns: 20 })).toEqual([10]);
+  });
+
+  it('เส้นแบ่งหนา ┃ และเส้นคู่ ║ พร้อมตัวเชื่อมของมัน', () => {
+    const heavy = Array.from({ length: 10 }, (_, i) => `side${' '.repeat(6)}${i === 0 ? '┳' : '┃'}content`);
+    expect(detectBorderColumns(grid(heavy), { rows: 10, columns: 20 })).toEqual([10]);
+
+    const double = Array.from({ length: 10 }, (_, i) => `side${' '.repeat(6)}${i === 0 ? '╦' : '║'}content`);
+    expect(detectBorderColumns(grid(double), { rows: 10, columns: 20 })).toEqual([10]);
+  });
+
+  it('ตัวเชื่อมยังไม่ทำให้เนื้อความธรรมดากลายเป็นเส้นแบ่ง', () => {
+    const rows = Array.from({ length: 20 }, (_, i) => (i < 3 ? 'aa┼bb' : 'plain text'));
+    expect(detectBorderColumns(grid(rows), { rows: 20, columns: 20 })).toEqual([]);
+  });
+});
+
 describe('panesFromBorders', () => {
   it('แบ่งความกว้างออกเป็นสอง pane รอบเส้นแบ่ง', () => {
     expect(panesFromBorders([20], 80)).toEqual([{ start: 0, end: 19 }, { start: 21, end: 79 }]);

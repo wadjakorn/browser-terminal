@@ -180,15 +180,45 @@ describe('createOutbound — backpressure', () => {
     out.dispose();
   });
 
-  it('dispose ระหว่าง pause แล้ว ack มาทีหลัง → ไม่ resume ต้นทางที่ตายแล้ว', () => {
+  it('dispose ขณะ pause อยู่ → resume ครั้งเดียว แล้ว ack ที่มาทีหลังไม่ resume ซ้ำ', () => {
+    // node-pty ไม่ยิง exit จนกว่า socket ของ PTY จะ close และถ้า socket ถูก
+    // pause ไว้ EOF จะไม่ถูกอ่าน — ต้อง resume ตอน dispose ไม่งั้นข้อมูลที่
+    // ค้างอยู่ตอน DESTROY_SOCKET_TIMEOUT_MS หมดจะหายไปเงียบๆ (ดูเหตุผลใน dispose())
     const f = fakes();
     const out = createOutbound(f.sink, f.source, opts);
     out.push(buf('12345678901'));
     expect(f.calls).toEqual(['pause']);
     out.dispose();
-    f.ackAll();                      // socket ปิดแล้ว ws ยังเรียก callback อยู่ดี
-    expect(f.calls).toEqual(['pause']);
+    expect(f.calls).toEqual(['pause', 'resume']);
+    f.ackAll();                      // socket ปิดแล้ว ws ยังเรียก callback อยู่ดี — ห้าม resume ซ้ำ
+    expect(f.calls).toEqual(['pause', 'resume']);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('dispose ตอนไม่ได้ pause อยู่ → ไม่เรียก resume เกินจำเป็น', () => {
+    const f = fakes();
+    const out = createOutbound(f.sink, f.source, opts);
+    out.push(buf('123'));
+    expect(f.calls).toEqual([]);
+    out.dispose();
+    expect(f.calls).toEqual([]);
+  });
+
+  it('เกินเพดานตอนสะสมใน pending ยังไม่ทัน flush ก็ต้อง pause แล้ว ไม่รอ timer', () => {
+    // เดิม pause เช็คแค่หลัง sink.send() ตอนหน้าต่างปิด — ของที่สะสมใน pending
+    // ระหว่างหน้าต่างเปิดจึงพุ่งเกินเพดานได้อิสระโดยไม่มีใครห้าม (วัดจริงได้ 275 KB
+    // ในหน้าต่างเดียวจาก `yes | head -200000`) ต้องเช็คตั้งแต่ push ก่อน timer ยิง
+    const f = fakes();
+    const out = createOutbound(f.sink, f.source, opts);
+    out.push(buf('ab'));             // 2 ไบต์ ออกทันที (immediate-first) → outstanding = 2
+    expect(f.sent).toEqual(['ab']);
+    expect(f.calls).toEqual([]);
+    out.push(buf('12345678901'));    // 11 ไบต์ สะสมใน pending (หน้าต่างเปิดอยู่)
+    // 2 (outstanding) + 11 (pending) = 13 > 10 → pause ต้องมาจาก push() นี้เอง
+    // ไม่ใช่ตอน timer ครบ 5ms
+    expect(f.calls).toEqual(['pause']);
+    expect(f.sent).toEqual(['ab']);  // ยังไม่ flush เพราะหน้าต่างยังไม่ปิด
+    out.dispose();
   });
 
   it('ไม่มี timer เพิ่มจากกลไก backpressure เลย', () => {

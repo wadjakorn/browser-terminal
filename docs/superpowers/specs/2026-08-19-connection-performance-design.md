@@ -71,18 +71,19 @@ node-pty มี `pause()` / `resume()` ให้อยู่แล้ว (`node-
 
 ### 3. Backpressure
 
-หลัง flush ทุกครั้ง ตรวจ `ws.bufferedAmount`:
+หลัง flush ทุกครั้ง ตรวจไบต์ที่ส่งเข้า ws แล้วแต่ยังไม่ถูกเขียนลง socket (`outstanding`):
 
-- เกิน **HIGH = 256 KB** → `term.pause()` หยุดอ่านจาก PTY จริง ซึ่งจะไป block
+- เกิน **HIGH = 32 KB** → `term.pause()` หยุดอ่านจาก PTY จริง ซึ่งจะไป block
   โปรแกรมที่พ่น output ผ่าน pipe buffer ของ OS — พฤติกรรมเดียวกับเทอร์มินัลจริง
   ที่เลื่อนจอตามไม่ทัน
-- ระหว่าง pause ตั้ง interval 50 ms คอยดู เมื่อลงต่ำกว่า **LOW = 64 KB** →
-  `term.resume()` แล้วเคลียร์ interval
-- `dispose` ต้องเคลียร์ทั้ง cooldown timer และ drain interval ไม่งั้น timer
-  ค้างหลัง socket ปิด
+- ลงต่ำกว่า **LOW = 8 KB** → `term.resume()`
+- **ไม่ poll** — `ws.send(data, cb)` เรียก callback เมื่อข้อมูลถูกเขียนลง socket จริง
+  จึงนับ `outstanding` เองแบบ event-driven ได้ ไม่ต้องมี interval ให้เคลียร์เลย
+- `dispose` เคลียร์ cooldown timer และตั้งธง `disposed` เพื่อไม่ให้ callback ที่มา
+  ทีหลัง resume PTY ที่ถูกฆ่าไปแล้ว
 
 นี่คือส่วนที่แก้อาการ "พิมพ์แล้วหน่วงเป็นวินาทีตอนมี output ค้าง" เพราะคิวถูก
-จำกัดไม่ให้ยาวเกิน ~256 KB แทนที่จะโตได้ไม่จำกัด
+จำกัดไม่ให้ยาวเกิน ~32 KB (≈ หนึ่ง RTT) แทนที่จะโตได้ไม่จำกัด
 
 ### ค่าคงที่
 
@@ -90,9 +91,8 @@ node-pty มี `pause()` / `resume()` ให้อยู่แล้ว (`node-
 |-----|---------|--------|
 | cooldown window | 5 ms | เล็กพอที่ RTT 150 ms กลบมิด ใหญ่พอที่จะยุบ burst |
 | deflate threshold | 1 KB | กัน echo frame จิ๋วไม่ให้เสียเวลา deflate |
-| bufferedAmount HIGH | 256 KB | ~1 วินาทีของข้อมูลบน cellular ทั่วไป |
-| bufferedAmount LOW | 64 KB | hysteresis กัน pause/resume กระพริบ |
-| drain poll | 50 ms | ถี่พอไม่ให้ PTY ค้างเปล่า ห่างพอไม่กิน CPU |
+| outstanding HIGH | 32 KB | ≈ 130 ms ≈ หนึ่ง RTT บน cellular — ใหญ่กว่านี้คือยอมให้ echo ช้าเป็นวินาที |
+| outstanding LOW | 8 KB | hysteresis กัน pause/resume กระพริบ |
 
 ทั้งหมดปรับได้หลังวัดจริง
 
@@ -109,9 +109,10 @@ node-pty มี `pause()` / `resume()` ให้อยู่แล้ว (`node-
 
 1. chunk เดี่ยวถึง client โดยไม่ต้องรอ timer — พิสูจน์ immediate-first
 2. chunk รัวๆ ในหน้าต่างเดียว → client ได้รับ frame เดียว เนื้อครบ เรียงถูก
-3. `bufferedAmount` ทะลุ HIGH → `pause()` ถูกเรียก; ระบายต่ำกว่า LOW → `resume()`
-   (ฉีด fake ws/term เพื่อคุมค่า)
-4. ปิด socket ระหว่าง pause → ไม่มี timer ค้าง
+3. `outstanding` ทะลุ HIGH → `pause()` ถูกเรียก; ack จนต่ำกว่า LOW → `resume()`
+   (ฉีด fake sink/source แล้วสั่ง ack เองในเทส)
+4. dispose ระหว่าง pause แล้ว callback มาทีหลัง → ไม่ resume PTY ที่ตายแล้ว
+5. output ก้อนสุดท้ายก่อน `onExit` ต้องถูก flush ก่อนปิด socket ไม่หายไปกับหน้าต่างรวม chunk
 
 ## การวัดผล
 

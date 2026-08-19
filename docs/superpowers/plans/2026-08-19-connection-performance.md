@@ -15,7 +15,7 @@
 - Node.js 22+ และ pnpm เท่านั้น
 - โค้ดเป็น ESM: import ภายในโปรเจกต์ต้องลงท้าย `.js` เสมอ (เช่น `./outbound.js`) แม้ไฟล์จริงเป็น `.ts`
 - คอมเมนต์ในโค้ดและข้อความ commit เป็นภาษาไทย ตามแบบที่ใช้อยู่ทั้ง repo — คอมเมนต์อธิบาย **เหตุผล** ไม่ใช่อธิบายว่าโค้ดทำอะไร
-- ค่าคงที่ที่ตกลงไว้: cooldown window `5 ms`, deflate threshold `1024` bytes, `HIGH_WATER = 256 * 1024`, `LOW_WATER = 64 * 1024`, drain poll `50 ms`
+- ค่าคงที่ที่ตกลงไว้: cooldown window `5 ms`, deflate threshold `1024` bytes, `HIGH_WATER = 32 * 1024`, `LOW_WATER = 8 * 1024` (ไม่มี polling — ใช้ callback ของ `ws.send`)
 - ห้ามใช้ `@xterm/addon-attach`, `@xterm/addon-canvas`, `@xterm/addon-webgl` (ข้อห้ามเดิมของ repo)
 - ทุก task จบด้วย `pnpm test` ผ่านทั้งชุด ก่อน commit
 - ก่อนแก้โค้ดบรรทัดแรก: `git fetch origin` แล้วสร้าง worktree ใหม่จาก `origin/main`
@@ -35,10 +35,11 @@
 **Interfaces:**
 - Consumes: ไม่มี (task แรก)
 - Produces:
-  - `interface OutboundSink { send(data: Buffer): void; bufferedAmount(): number }`
+  - `interface OutboundSink { send(data: Buffer, onFlushed: () => void): void }`
+    — `onFlushed` ต้องถูกเรียกเมื่อข้อมูลออกจาก buffer ของ socket จริง (Task 2 ใช้ค่านี้ทำ backpressure)
   - `interface OutboundSource { pause(): void; resume(): void }`
-  - `interface OutboundOptions { windowMs?: number; highWater?: number; lowWater?: number; drainPollMs?: number }`
-  - `function createOutbound(sink: OutboundSink, source: OutboundSource, opts?: OutboundOptions): { push(data: Buffer): void; dispose(): void }`
+  - `interface OutboundOptions { windowMs?: number; highWater?: number; lowWater?: number }`
+  - `function createOutbound(sink: OutboundSink, source: OutboundSource, opts?: OutboundOptions): { push(data: Buffer): void; flush(): void; dispose(): void }`
 
 - [ ] **Step 1: เขียนเทสที่ยังไม่ผ่าน**
 
@@ -48,22 +49,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createOutbound, type OutboundSink, type OutboundSource } from './outbound.js';
 
+/** sink ปลอมที่เก็บ callback ไว้ให้เทสสั่ง ack เองได้ — Task 2 ใช้เต็มที่ */
 function fakes() {
   const sent: string[] = [];
-  let buffered = 0;
+  const acks: Array<() => void> = [];
   const calls: string[] = [];
   const sink: OutboundSink = {
-    send: data => { sent.push(data.toString('utf8')); },
-    bufferedAmount: () => buffered,
+    send: (data, onFlushed) => { sent.push(data.toString('utf8')); acks.push(onFlushed); },
   };
   const source: OutboundSource = {
     pause: () => { calls.push('pause'); },
     resume: () => { calls.push('resume'); },
   };
-  return {
-    sink, source, sent, calls,
-    setBuffered: (n: number) => { buffered = n; },
-  };
+  /** ack ทุก frame ที่ค้างอยู่ตามลำดับ */
+  const ackAll = () => { while (acks.length) acks.shift()!(); };
+  return { sink, source, sent, acks, calls, ackAll };
 }
 
 const buf = (s: string) => Buffer.from(s, 'utf8');
@@ -127,6 +127,26 @@ describe('createOutbound — coalescing', () => {
     out.dispose();
   });
 
+  it('flush() ส่งของค้างทันทีโดยไม่รอหน้าต่าง', () => {
+    // ใช้ตอน shell ตาย: ถ้าไม่มีตัวนี้ output บรรทัดสุดท้ายจะหายไปกับ pending
+    const f = fakes();
+    const out = createOutbound(f.sink, f.source);
+    out.push(buf('a'));
+    out.push(buf('ลาก่อน'));
+    expect(f.sent).toEqual(['a']);
+    out.flush();
+    expect(f.sent).toEqual(['a', 'ลาก่อน']);
+    out.dispose();
+  });
+
+  it('flush() ตอนไม่มีของค้าง ไม่ส่ง frame เปล่า', () => {
+    const f = fakes();
+    const out = createOutbound(f.sink, f.source);
+    out.flush();
+    expect(f.sent).toEqual([]);
+    out.dispose();
+  });
+
   it('dispose แล้ว push ต่อไม่ส่งอะไรอีก และไม่มี timer ค้าง', () => {
     const f = fakes();
     const out = createOutbound(f.sink, f.source);
@@ -155,8 +175,8 @@ describe('createOutbound — coalescing', () => {
 const WINDOW_MS = 5;
 
 export interface OutboundSink {
-  send(data: Buffer): void;
-  bufferedAmount(): number;
+  /** `onFlushed` ต้องถูกเรียกเมื่อ data ออกจาก buffer ของ socket จริง */
+  send(data: Buffer, onFlushed: () => void): void;
 }
 
 export interface OutboundSource {
@@ -168,7 +188,6 @@ export interface OutboundOptions {
   windowMs?: number;
   highWater?: number;
   lowWater?: number;
-  drainPollMs?: number;
 }
 
 /**
@@ -183,7 +202,7 @@ export function createOutbound(
   sink: OutboundSink,
   source: OutboundSource,
   opts: OutboundOptions = {},
-): { push(data: Buffer): void; dispose(): void } {
+): { push(data: Buffer): void; flush(): void; dispose(): void } {
   const windowMs = opts.windowMs ?? WINDOW_MS;
 
   let pending: Buffer[] = [];
@@ -191,11 +210,11 @@ export function createOutbound(
   let disposed = false;
 
   /** คืน true ถ้ามีของให้ส่งจริง — ใช้ตัดสินว่ายังอยู่ใน burst อยู่ไหม */
-  const flush = (): boolean => {
+  const flushPending = (): boolean => {
     if (pending.length === 0) return false;
     const data = pending.length === 1 ? pending[0]! : Buffer.concat(pending);
     pending = [];
-    sink.send(data);
+    sink.send(data, () => { /* Task 2 เติม backpressure ตรงนี้ */ });
     return true;
   };
 
@@ -204,7 +223,7 @@ export function createOutbound(
       window = null;
       // ยังมีของสะสม = ยังอยู่ใน burst ต่อหน้าต่างใหม่
       // ไม่มีของ = จอเงียบแล้ว ปล่อยให้ push ครั้งหน้าส่งทันที
-      if (flush()) openWindow();
+      if (flushPending()) openWindow();
     }, windowMs);
   };
 
@@ -213,8 +232,16 @@ export function createOutbound(
       if (disposed) return;
       pending.push(data);
       if (window) return;
-      flush();
+      flushPending();
       openWindow();
+    },
+    /**
+     * ส่งของค้างทันที ใช้ตอน PTY ตาย — `onExit` ปิด socket ทันทีที่ยิง
+     * ถ้าไม่ล้างหน้าต่างก่อน output บรรทัดสุดท้ายจะหายไปเงียบๆ
+     */
+    flush(): void {
+      if (disposed) return;
+      flushPending();
     },
     dispose(): void {
       disposed = true;
@@ -228,7 +255,7 @@ export function createOutbound(
 - [ ] **Step 4: รันเทสให้ผ่าน**
 
 รัน: `pnpm vitest run server/outbound.test.ts`
-คาดว่า: ผ่านทั้ง 6 เทส
+คาดว่า: ผ่านทั้ง 8 เทส
 
 - [ ] **Step 5: รันทั้งชุดและ commit**
 
@@ -240,34 +267,38 @@ git commit -m "รวม chunk ขาออกแบบ immediate-first เพ�
 
 ---
 
-### Task 2: Backpressure ผูกกับ ws.bufferedAmount
+### Task 2: Backpressure แบบ event-driven ด้วย send callback
 
-ตัวนี้คือส่วนที่แก้อาการเจ็บที่สุด: ตอน `cat` ไฟล์ใหญ่ ข้อมูลหลายร้อย KB เข้าคิวรออยู่หน้า ตัวอักษรที่พิมพ์ต่อจากนั้นต้องต่อแถวอยู่หลังทั้งหมด การจำกัดคิวไม่ให้ยาวเกินเพดานคือสิ่งที่ทำให้ echo กลับมาอยู่ในระดับ RTT
+ตัวนี้คือส่วนที่แก้อาการเจ็บที่สุด: ตอน `cat` ไฟล์ใหญ่ ข้อมูลเข้าคิวรออยู่หน้า ตัวอักษรที่พิมพ์ต่อจากนั้นต้องต่อแถวอยู่หลังทั้งหมด การจำกัดคิวไม่ให้ยาวเกินเพดานคือสิ่งที่ทำให้ echo กลับมาอยู่ในระดับ RTT
+
+**สองอย่างที่ต้องเข้าใจก่อนเขียน:**
+
+1. **เพดานต้องเล็ก** เกณฑ์ความสำเร็จคือ echo ตอนมี output ไหล ต้องใกล้เคียงตอนจอเงียบ (≈ RTT 150 ms) บน cellular ~2 Mbps คิว 32 KB ≈ 130 ms ≈ หนึ่ง RTT พอดี ถ้าตั้งไว้หลักร้อย KB ก็คือยอมให้ echo ช้าเป็นวินาทีตั้งแต่ออกแบบ
+2. **นับเองด้วย callback ไม่ poll `bufferedAmount`** ที่เพดานเล็กขนาดนี้ การ poll ทุก 50 ms ทำให้ลิงก์ว่างรอเปล่าเกือบครึ่งเวลา `ws.send(data, cb)` เรียก callback เมื่อข้อมูลถูกเขียนลง socket จริง — นับ `outstanding` เองจึงทั้งตรงกว่าและไม่ต้องมี timer ให้เคลียร์
 
 **Files:**
 - Modify: `server/outbound.ts` (เพิ่มเข้าไปใน `createOutbound` ที่สร้างใน Task 1)
 - Test: `server/outbound.test.ts` (เพิ่ม describe block ใหม่ต่อท้าย)
 
 **Interfaces:**
-- Consumes: `createOutbound`, `OutboundSink`, `OutboundSource`, `OutboundOptions` จาก Task 1 (ลายเซ็นไม่เปลี่ยน — `opts.highWater` / `opts.lowWater` / `opts.drainPollMs` ที่ประกาศไว้แล้วเริ่มมีผลใน task นี้)
-- Produces: ไม่มี export ใหม่ พฤติกรรมเพิ่ม: `source.pause()` เมื่อ `sink.bufferedAmount()` เกิน `highWater` และ `source.resume()` เมื่อลงต่ำกว่า `lowWater`
+- Consumes: `createOutbound`, `OutboundSink`, `OutboundSource`, `OutboundOptions` จาก Task 1 (ลายเซ็นไม่เปลี่ยน — `opts.highWater` / `opts.lowWater` ที่ประกาศไว้แล้วเริ่มมีผลใน task นี้)
+- Produces: ไม่มี export ใหม่ พฤติกรรมเพิ่ม: `source.pause()` เมื่อไบต์ที่ยังไม่ถูกเขียนลง socket เกิน `highWater` และ `source.resume()` เมื่อลงต่ำกว่า `lowWater`
 
 - [ ] **Step 1: เขียนเทสที่ยังไม่ผ่าน**
 
-เติมต่อท้าย `server/outbound.test.ts`:
+เติมต่อท้าย `server/outbound.test.ts` (ใช้ `fakes()` และ `buf()` ที่ประกาศไว้แล้วใน Task 1):
 
 ```ts
 describe('createOutbound — backpressure', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  const opts = { highWater: 1000, lowWater: 200, drainPollMs: 50 };
+  const opts = { highWater: 10, lowWater: 4 };
 
   it('คิวทะลุเพดาน → สั่ง pause ต้นทาง', () => {
     const f = fakes();
     const out = createOutbound(f.sink, f.source, opts);
-    f.setBuffered(1001);
-    out.push(buf('a'));
+    out.push(buf('12345678901'));    // 11 ไบต์ > 10
     expect(f.calls).toEqual(['pause']);
     out.dispose();
   });
@@ -275,52 +306,75 @@ describe('createOutbound — backpressure', () => {
   it('คิวยังไม่ถึงเพดาน → ไม่ยุ่งกับต้นทาง', () => {
     const f = fakes();
     const out = createOutbound(f.sink, f.source, opts);
-    f.setBuffered(999);
-    out.push(buf('a'));
+    out.push(buf('123456'));
     expect(f.calls).toEqual([]);
     out.dispose();
   });
 
-  it('ระบายลงต่ำกว่า lowWater → resume', () => {
+  it('นับสะสมข้ามหลาย frame ไม่ใช่ดูทีละ frame', () => {
     const f = fakes();
     const out = createOutbound(f.sink, f.source, opts);
-    f.setBuffered(1001);
-    out.push(buf('a'));
+    out.push(buf('123456'));         // ออกทันที 6 ไบต์ ยังไม่เกิน
+    expect(f.calls).toEqual([]);
+    out.push(buf('123456'));         // สะสมในหน้าต่าง
+    vi.advanceTimersByTime(5);       // ส่งอีก 6 → รวม 12 > 10
     expect(f.calls).toEqual(['pause']);
+    out.dispose();
+  });
 
-    f.setBuffered(500);              // ยังอยู่ระหว่าง low กับ high
-    vi.advanceTimersByTime(50);
+  it('ack แล้วลงต่ำกว่า lowWater → resume', () => {
+    const f = fakes();
+    const out = createOutbound(f.sink, f.source, opts);
+    out.push(buf('12345678901'));
     expect(f.calls).toEqual(['pause']);
-
-    f.setBuffered(199);
-    vi.advanceTimersByTime(50);
+    f.ackAll();                      // เขียนลง socket หมดแล้ว → outstanding = 0
     expect(f.calls).toEqual(['pause', 'resume']);
-    expect(vi.getTimerCount()).toBe(0);   // drain interval ต้องถูกเคลียร์
+    out.dispose();
+  });
+
+  it('ack บางส่วนที่ยังไม่ต่ำกว่า lowWater → ยังไม่ resume', () => {
+    const f = fakes();
+    const out = createOutbound(f.sink, f.source, opts);
+    out.push(buf('123456'));         // frame 1: 6 ไบต์
+    out.push(buf('123456'));
+    vi.advanceTimersByTime(5);       // frame 2: 6 ไบต์ → รวม 12 → pause
+    expect(f.calls).toEqual(['pause']);
+    f.acks.shift()!();               // ack frame แรก → เหลือ 6 ซึ่งยัง >= 4
+    expect(f.calls).toEqual(['pause']);
+    f.acks.shift()!();               // ack frame ที่สอง → เหลือ 0
+    expect(f.calls).toEqual(['pause', 'resume']);
     out.dispose();
   });
 
   it('ระหว่าง pause ไม่สั่ง pause ซ้ำ', () => {
     const f = fakes();
     const out = createOutbound(f.sink, f.source, opts);
-    f.setBuffered(1001);
-    out.push(buf('a'));
-    out.push(buf('b'));
+    out.push(buf('12345678901'));
+    out.push(buf('12345678901'));
     vi.advanceTimersByTime(5);
     vi.advanceTimersByTime(5);
     expect(f.calls).toEqual(['pause']);
     out.dispose();
   });
 
-  it('dispose ระหว่าง pause → ไม่มี timer ค้าง และไม่สั่ง resume ทีหลัง', () => {
+  it('dispose ระหว่าง pause แล้ว ack มาทีหลัง → ไม่ resume ต้นทางที่ตายแล้ว', () => {
     const f = fakes();
     const out = createOutbound(f.sink, f.source, opts);
-    f.setBuffered(1001);
-    out.push(buf('a'));
+    out.push(buf('12345678901'));
+    expect(f.calls).toEqual(['pause']);
     out.dispose();
-    f.setBuffered(0);
-    vi.advanceTimersByTime(1000);
+    f.ackAll();                      // socket ปิดแล้ว ws ยังเรียก callback อยู่ดี
     expect(f.calls).toEqual(['pause']);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('ไม่มี timer เพิ่มจากกลไก backpressure เลย', () => {
+    const f = fakes();
+    const out = createOutbound(f.sink, f.source, opts);
+    out.push(buf('12345678901'));
+    vi.advanceTimersByTime(5);       // หน้าต่างปิดเพราะไม่มีของสะสม
+    expect(vi.getTimerCount()).toBe(0);
+    out.dispose();
   });
 });
 ```
@@ -335,11 +389,15 @@ describe('createOutbound — backpressure', () => {
 ใน `server/outbound.ts` เพิ่มค่าคงที่ต่อจาก `WINDOW_MS`:
 
 ```ts
-/** ~1 วินาทีของข้อมูลบน cellular ทั่วไป — เกินนี้คือ echo เริ่มติดอยู่หลังคิว */
-const HIGH_WATER = 256 * 1024;
-/** hysteresis กัน pause/resume กระพริบถี่ๆ */
-const LOW_WATER = 64 * 1024;
-const DRAIN_POLL_MS = 50;
+/**
+ * ~130 ms ของข้อมูลบน cellular ทั่วไป ≈ หนึ่ง RTT
+ *
+ * ตั้งใหญ่กว่านี้เท่ากับยอมให้ตัวอักษรที่ผู้ใช้พิมพ์ไปต่อแถวอยู่หลังคิวเป็นวินาที
+ * (head-of-line blocking) ซึ่งคืออาการที่งานนี้ตั้งใจแก้ทั้งหมด
+ */
+const HIGH_WATER = 32 * 1024;
+/** hysteresis กัน pause/resume กระพริบถี่ๆ ตอนคิวแกว่งรอบเพดาน */
+const LOW_WATER = 8 * 1024;
 ```
 
 ใน `createOutbound` เพิ่มการอ่าน options ต่อจาก `windowMs`:
@@ -347,58 +405,45 @@ const DRAIN_POLL_MS = 50;
 ```ts
   const highWater = opts.highWater ?? HIGH_WATER;
   const lowWater = opts.lowWater ?? LOW_WATER;
-  const drainPollMs = opts.drainPollMs ?? DRAIN_POLL_MS;
 ```
 
 เพิ่ม state ต่อจาก `let disposed = false;`:
 
 ```ts
-  let drain: ReturnType<typeof setInterval> | null = null;
+  /** ไบต์ที่ส่งเข้า ws แล้วแต่ยังไม่ถูกเขียนลง socket */
+  let outstanding = 0;
   let paused = false;
 ```
 
-เพิ่มฟังก์ชันก่อน `flush`:
+แทนที่บรรทัด `sink.send(...)` ใน `flushPending` ด้วย:
 
 ```ts
-  /**
-   * `ws.send()` เข้าคิวได้ไม่จำกัด — ปล่อยไว้แล้วคำสั่งที่พ่น output เยอะจะดอง
-   * ตัวอักษรที่ผู้ใช้พิมพ์ตามหลังไว้เป็นวินาที (head-of-line blocking)
-   *
-   * `term.pause()` หยุดอ่านจาก PTY จริง ทำให้โปรแกรมต้นทาง block ที่ pipe buffer
-   * ของ OS — พฤติกรรมเดียวกับเทอร์มินัลจริงที่เลื่อนจอตามไม่ทัน
-   */
-  const applyBackpressure = (): void => {
-    if (paused || disposed || sink.bufferedAmount() <= highWater) return;
-    paused = true;
-    source.pause();
-    drain = setInterval(() => {
-      if (sink.bufferedAmount() >= lowWater) return;
-      clearInterval(drain!);
-      drain = null;
-      paused = false;
-      source.resume();
-    }, drainPollMs);
-  };
-```
-
-เรียกใน `flush` ต่อจาก `sink.send(data);`:
-
-```ts
-    sink.send(data);
-    applyBackpressure();
-    return true;
-```
-
-และใน `dispose` เพิ่มก่อน `pending = [];`:
-
-```ts
-      if (drain) { clearInterval(drain); drain = null; }
+    outstanding += data.length;
+    sink.send(data, () => {
+      outstanding -= data.length;
+      // ต้นทางอาจตายไปแล้วตอน callback มาถึง — ห้ามปลุก pty ที่ถูกฆ่าทิ้ง
+      if (paused && !disposed && outstanding < lowWater) {
+        paused = false;
+        source.resume();
+      }
+    });
+    /**
+     * `ws.send()` เข้าคิวได้ไม่จำกัด — ปล่อยไว้แล้วคำสั่งที่พ่น output เยอะจะดอง
+     * ตัวอักษรที่ผู้ใช้พิมพ์ตามหลังไว้เป็นวินาที (head-of-line blocking)
+     *
+     * `source.pause()` หยุดอ่านจาก PTY จริง ทำให้โปรแกรมต้นทาง block ที่ pipe
+     * buffer ของ OS — พฤติกรรมเดียวกับเทอร์มินัลจริงที่เลื่อนจอตามไม่ทัน
+     */
+    if (!paused && !disposed && outstanding > highWater) {
+      paused = true;
+      source.pause();
+    }
 ```
 
 - [ ] **Step 4: รันเทสให้ผ่าน**
 
 รัน: `pnpm vitest run server/outbound.test.ts`
-คาดว่า: ผ่านทั้ง 11 เทส (6 จาก Task 1 + 5 ใหม่)
+คาดว่า: ผ่านทั้ง 16 เทส (8 จาก Task 1 + 8 ใหม่)
 
 - [ ] **Step 5: รันทั้งชุดและ commit**
 
@@ -413,7 +458,7 @@ git commit -m "หยุดอ่าน PTY เมื่อคิว ws ยา�
 ### Task 3: ต่อ outbound เข้ากับ attachPty
 
 **Files:**
-- Modify: `server/pty.ts` (บรรทัด 42-46 — บล็อก `term.onData` และ `dispose`)
+- Modify: `server/pty.ts` (บล็อก `dispose`, `term.onData`, `term.onExit` — บรรทัด 34-51)
 - Test: `server/pty.test.ts` (เพิ่มเทสต่อท้าย)
 
 **Interfaces:**
@@ -425,7 +470,8 @@ git commit -m "หยุดอ่าน PTY เมื่อคิว ws ยา�
 เติมต่อท้าย `server/pty.test.ts` ไฟล์นี้มี helper `pair()`, `alive()`, `until()` อยู่แล้วด้านบน และมีเทสรูปแบบ `client.send(Buffer.from('echo marker-hi\n'))` อยู่ก่อนหน้า — ใช้รูปแบบเดียวกัน
 
 เทสที่มีอยู่แล้วครอบคลุม round-trip ปกติ (`echo marker-hi`) สิ่งที่ยังไม่มีคือการพิสูจน์ว่า
-**burst ใหญ่ผ่านการรวม frame แล้วยังครบและเรียงถูก** ซึ่งเป็นความเสี่ยงที่ Task 1-2 สร้างขึ้น:
+**burst ใหญ่ผ่านการรวม frame แล้วยังครบและเรียงถูก** และ **output บรรทัดสุดท้ายก่อน shell
+ตายไม่หาย** ซึ่งเป็นสองความเสี่ยงที่ Task 1-2 สร้างขึ้นโดยตรง:
 
 ```ts
 describe('attachPty — burst ผ่านท่อ outbound', () => {
@@ -454,15 +500,31 @@ describe('attachPty — burst ผ่านท่อ outbound', () => {
     client.close();
     await close();
   });
+
+  it('output บรรทัดสุดท้ายก่อน shell ตาย ไม่หายไปกับหน้าต่างรวม chunk', async () => {
+    // echo แล้ว exit ติดกันทันที — ระยะห่างระหว่าง onData กับ onExit สั้นกว่า
+    // หน้าต่าง 5 ms ถ้าไม่ flush ก่อนปิด socket บรรทัดนี้จะหายเงียบๆ
+    const { server, client, close } = await pair();
+    let received = '';
+    client.on('message', raw => { received += raw.toString('utf8'); });
+    const closed = new Promise<void>(r => client.once('close', () => r()));
+
+    attachPty(server, { shellCmd: 'bash', cols: 80, rows: 24 });
+    client.send(Buffer.from('printf FAREWELL-MARKER; exit\n'));
+
+    await closed;
+    expect(received).toContain('FAREWELL-MARKER');
+    await close();
+  });
 });
 ```
 
 - [ ] **Step 2: รันเทสเพื่อยืนยัน baseline**
 
 รัน: `pnpm vitest run server/pty.test.ts`
-คาดว่า: **ผ่าน** — เทสนี้เป็น regression guard ไม่ใช่เทสที่ขับ implementation ใหม่
-(พฤติกรรมที่ต้องคงไว้คือ "ข้อมูลครบและเรียงถูก" ซึ่งโค้ดเดิมทำได้อยู่แล้ว) ต้องเห็นว่าผ่าน
-**ก่อน** แก้ `pty.ts` เพื่อให้รู้ว่าถ้ามันล้มหลังแก้ คือ outbound ทำพัง ไม่ใช่เทสเขียนผิด
+คาดว่า: **ผ่านทั้งคู่** — โค้ดเดิมที่ยิง `ws.send()` ตรงๆ ทำสองอย่างนี้ได้อยู่แล้ว
+เทสชุดนี้คือ regression guard ต้องเห็นว่าผ่าน **ก่อน** แก้ `pty.ts` เพื่อให้รู้ว่า
+ถ้ามันล้มหลังแก้ คือ outbound ทำพัง ไม่ใช่เทสเขียนผิด
 
 - [ ] **Step 3: แก้ pty.ts ให้ใช้ outbound**
 
@@ -470,6 +532,34 @@ describe('attachPty — burst ผ่านท่อ outbound', () => {
 
 ```ts
 import { createOutbound } from './outbound.js';
+```
+
+สร้าง outbound **ก่อน** `const dispose = ...` (ถ้าวางไว้หลัง จะอ้างตัวแปรก่อน initialize
+แล้วพังตอน runtime เพราะ TDZ):
+
+```ts
+  const outbound = createOutbound(
+    {
+      send: (data, onFlushed) => {
+        // socket ปิดไปแล้วก็ต้องเรียก onFlushed อยู่ดี ไม่งั้น outstanding ค้าง
+        // แล้ว backpressure จะ pause ทิ้งไว้ตลอดกาล
+        if (ws.readyState !== ws.OPEN) { onFlushed(); return; }
+        ws.send(data, () => onFlushed());
+      },
+    },
+    { pause: () => term.pause(), resume: () => term.resume() },
+  );
+```
+
+แก้ `dispose` ให้ปิดท่อด้วย:
+
+```ts
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    outbound.dispose();
+    try { term.kill('SIGHUP'); } catch { /* ตายไปแล้ว */ }
+  };
 ```
 
 แทนที่บล็อก `term.onData(...)` เดิม:
@@ -483,29 +573,21 @@ import { createOutbound } from './outbound.js';
 ด้วย:
 
 ```ts
-  const outbound = createOutbound(
-    {
-      send: data => { if (ws.readyState === ws.OPEN) ws.send(data); },
-      bufferedAmount: () => ws.bufferedAmount,
-    },
-    { pause: () => term.pause(), resume: () => term.resume() },
-  );
-
   term.onData(data => outbound.push(Buffer.from(data, 'utf8')));
 ```
 
-และใน `dispose` เพิ่ม `outbound.dispose();` เป็นบรรทัดแรกหลัง `disposed = true;`:
+และแก้ `term.onExit` ให้ล้างหน้าต่างก่อนปิด socket:
 
 ```ts
-  const dispose = () => {
-    if (disposed) return;
+  term.onExit(({ exitCode }) => {
     disposed = true;
-    outbound.dispose();
-    try { term.kill('SIGHUP'); } catch { /* ตายไปแล้ว */ }
-  };
+    // ต้อง flush ก่อน close เสมอ: onExit มาถึงได้ภายในไม่กี่ไมโครวินาทีหลัง
+    // onData ก้อนสุดท้าย ซึ่งยังนอนอยู่ในหน้าต่างรวม chunk — ปิดเลยคือทำ output
+    // บรรทัดสุดท้ายหายเงียบๆ (ws จะส่ง close frame ต่อท้ายข้อมูลที่เข้าคิวไว้แล้ว)
+    outbound.flush();
+    if (ws.readyState === ws.OPEN) ws.close(1000, `exit:${exitCode}`);
+  });
 ```
-
-ข้อควรระวังเรื่องลำดับ: `dispose` ถูกประกาศก่อน `outbound` ในไฟล์เดิม ต้องย้ายบล็อก `createOutbound` ขึ้นไปอยู่**ก่อน** `const dispose = ...` ไม่งั้นจะอ้าง `outbound` ก่อนถูก initialize (TDZ) แล้วพังตอน runtime
 
 - [ ] **Step 4: รันเทสให้ยังผ่าน**
 
@@ -614,8 +696,9 @@ output จาก PTY ไม่ได้ยิงเข้า `ws.send()` ตร�
 - **รวม chunk แบบ immediate-first** — chunk แรกหลังจอเงียบส่งทันที (นั่นคือ echo ของ
   ตัวอักษรที่เพิ่งพิมพ์ หน่วงไม่ได้) chunk ที่ตามมาใน 5 ms ถึงจะถูกสะสมแล้วส่งรวดเดียว
   burst จาก `cat` หรือ build log จึงถูกยุบเหลือ ~200 frame/วินาที แทนที่จะเป็นพันเฟรม
-- **หยุดอ่าน PTY เมื่อคิวยาวเกิน** — เกิน 256 KB สั่ง `term.pause()` และ resume เมื่อ
-  ระบายต่ำกว่า 64 KB ถ้าไม่ทำ ข้อมูลที่ค้างในคิวจะดองตัวอักษรที่ผู้ใช้พิมพ์ตามหลัง
+- **หยุดอ่าน PTY เมื่อคิวยาวเกิน** — เกิน 32 KB (≈ หนึ่ง RTT ของข้อมูลบน cellular)
+  สั่ง `term.pause()` และ resume เมื่อระบายต่ำกว่า 8 KB นับจาก callback ของ `ws.send()`
+  ไม่ใช่ poll ถ้าไม่ทำ ข้อมูลที่ค้างในคิวจะดองตัวอักษรที่ผู้ใช้พิมพ์ตามหลัง
   ไว้เป็นวินาที (head-of-line blocking) ซึ่งเป็นอาการที่รู้สึกได้ชัดที่สุดบนมือถือ
 - **บีบอัดเฉพาะ frame ใหญ่** — `perMessageDeflate` มี `threshold: 1024` เพื่อไม่ให้
   frame echo จิ๋วๆ ต้องเสียเวลา deflate

@@ -136,6 +136,28 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     );
   };
 
+  /**
+   * ยามกันคีย์บอร์ดเด้งระหว่างโหมดเลือก
+   *
+   * xterm รองรับ primary selection ของ X11 ด้วยการโฟกัส textarea ทุกครั้งที่
+   * selection เปลี่ยน:
+   *
+   *   refresh(e) { ... isLinux && e && selectionText.length
+   *                 && _onLinuxMouseSelection.fire(selectionText) }
+   *   onLinuxMouseSelection(text => { textarea.value = text; textarea.focus(); ... })
+   *
+   * และ `isLinux` มาจาก navigator.platform ซึ่งบน Android คือ "Linux armv8l" จึงเข้า
+   * เงื่อนไขเต็มๆ ส่วน refresh(true) ถูกเรียกทั้งใน handleMouseDown และ
+   * _handleMouseMove แปลว่ามันโฟกัสกลับมาใหม่ทุกครั้งที่นิ้วขยับ — blur ครั้งเดียว
+   * ตอนเริ่มลากจึงเอาไม่อยู่ ต้องกันที่ตัว focus เอง
+   *
+   * วัดแล้วในเบราว์เซอร์จริง: blur อย่างเดียว focused กลับเป็น true ตั้งแต่ mousemove
+   * แรก ส่วนยามตัวนี้ทำให้ focused เป็น false ตลอดการลากโดย selection ยังอยู่ครบ
+   */
+  t.textarea?.addEventListener('focus', () => {
+    if (selection?.active()) t.blur();
+  });
+
   // sync สถานะปุ่มจากทุกทางที่สถานะเปลี่ยนได้โดยไม่ผ่าน toggleKeyboard ของเรา
   t.textarea?.addEventListener('focus', syncKeyboardButton);
   t.textarea?.addEventListener('blur', syncKeyboardButton);

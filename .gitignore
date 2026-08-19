@@ -5,3 +5,4 @@ web/dist/
 .superpowers/
 .session-epoch
 .claude/worktrees/
+.playwright-mcp/

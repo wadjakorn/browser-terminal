@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createTextSelection, type TerminalPort } from './text-selection.js';
+import { createTextSelection, selectionMouseInit, type TerminalPort } from './text-selection.js';
 import type { SelectionPrefs } from './selection-prefs.js';
 
 const CELL_W = 10;
@@ -256,5 +256,33 @@ describe('การล้างสถานะ', () => {
     expect(onRegionPicked).not.toHaveBeenCalled();
     expect(clearSelection).toHaveBeenCalled();
     expect(selection.active()).toBe(true);
+  });
+});
+
+describe('ธงบน mouse event สังเคราะห์', () => {
+  it('detail ต้องเป็น 1 — ขาดไปแล้ว xterm จะไม่เลือกอะไรเลยแบบเงียบๆ', () => {
+    // SelectionService.handleMouseDown แยกทางด้วย `1===e.detail ? _handleSingleClick : ...`
+    // new MouseEvent() ที่ไม่ระบุ detail ได้ 0 ซึ่งไม่เข้าสาขาไหน ผลคือไม่มีไฮไลต์และ
+    // ไม่มี error ให้เห็น ยืนยันด้วยการวัดจริงในเบราว์เซอร์แล้ว
+    expect(selectionMouseInit('mousedown', 10, 20).detail).toBe(1);
+  });
+
+  it('shiftKey + altKey ต้องมีครบทั้งคู่ทุก event', () => {
+    for (const type of ['mousedown', 'mousemove', 'mouseup'] as const) {
+      const init = selectionMouseInit(type, 1, 2);
+      expect(init.shiftKey).toBe(true);   // shouldForceSelection บนเครื่องที่ไม่ใช่ Mac
+      expect(init.altKey).toBe(true);     // shouldColumnSelect + shouldForceSelection บน iPad
+      expect(init.button).toBe(0);        // handleMouseDown ตรวจ 0===e.button
+    }
+  });
+
+  it('buttons เป็น 1 ตอนกดค้าง และ 0 ตอนปล่อย', () => {
+    expect(selectionMouseInit('mousedown', 1, 2).buttons).toBe(1);
+    expect(selectionMouseInit('mousemove', 1, 2).buttons).toBe(1);
+    expect(selectionMouseInit('mouseup', 1, 2).buttons).toBe(0);
+  });
+
+  it('ส่งพิกัดต่อไปตรงตัว', () => {
+    expect(selectionMouseInit('mousemove', 37.5, 91.5)).toMatchObject({ clientX: 37.5, clientY: 91.5 });
   });
 });

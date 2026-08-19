@@ -29,6 +29,37 @@ import {
 import { blockFrom, clampColumn, extractText, type Block, type Cell } from './selection-region.js';
 import type { SelectionPrefs } from './selection-prefs.js';
 
+/**
+ * ค่า MouseEventInit ของ event สังเคราะห์ที่ใช้ขับ selection ของ xterm
+ *
+ * แยกออกมาเป็นฟังก์ชันบริสุทธิ์เพราะทุกฟิลด์ในนี้เป็นเงื่อนไขที่ xterm ตรวจจริง และ
+ * ขาดไปตัวเดียวก็เงียบสนิทโดยไม่มี error ให้เห็น:
+ *
+ * - `detail: 1` — SelectionService.handleMouseDown แยกทางด้วยจำนวนคลิก
+ *   (`1===e.detail ? _handleSingleClick : 2===e.detail ? _handleDoubleClick : ...`)
+ *   `new MouseEvent()` ที่ไม่ระบุ detail จะได้ 0 ซึ่งไม่เข้าสาขาไหนเลย ผลคือไม่มี
+ *   การเลือกเกิดขึ้นและไม่มีไฮไลต์ ทั้งที่ event ถูกส่งถึงและผ่านด่านอื่นครบแล้ว
+ * - `shiftKey` — ทำให้ shouldForceSelection เป็นจริงบนเครื่องที่ไม่ใช่ Mac ซึ่งเป็น
+ *   ทางเดียวที่จะเลือกได้ขณะ mouse reporting เปิดอยู่
+ * - `altKey` — ทำให้ shouldColumnSelect เป็นจริง (โหมดเลือกแบบคอลัมน์) และทำให้
+ *   shouldForceSelection เป็นจริงบน iPad
+ * - `button: 0` — handleMouseDown ตรวจ `0===e.button` ตรงๆ
+ * - `buttons: 1` ระหว่างกดอยู่ — ต้องมีบน mousemove ด้วย ไม่ใช่แค่ mousedown
+ */
+export function selectionMouseInit(
+  type: 'mousedown' | 'mousemove' | 'mouseup',
+  clientX: number,
+  clientY: number,
+): MouseEventInit {
+  return {
+    clientX, clientY,
+    bubbles: true, cancelable: true,
+    detail: 1,
+    shiftKey: true, altKey: true,
+    button: 0, buttons: type === 'mouseup' ? 0 : 1,
+  };
+}
+
 export interface TerminalPort {
   rows: number;
   columns: number;

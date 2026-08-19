@@ -7,7 +7,7 @@ import { watchViewport } from './viewport.js';
 import { createGestureRecognizer } from './touch-gestures.js';
 import { isKeyboardVisible, shouldReleaseFocus } from './keyboard-visibility.js';
 import { fitAndSendResize } from './terminal-resize.js';
-import { createTextSelection, type TerminalPort } from './text-selection.js';
+import { createTextSelection, selectionMouseInit, type TerminalPort } from './text-selection.js';
 import { createSelectionSheet } from './selection-sheet.js';
 import { createClipboard } from './clipboard.js';
 import { loadSelectionPrefs } from './selection-prefs.js';
@@ -277,13 +277,9 @@ function createTerminalPort(t: Terminal, el: HTMLElement, target: HTMLElement): 
     },
 
     dispatchMouse(type, clientX, clientY) {
-      // shiftKey ทำให้ shouldForceSelection เป็นจริงบน Android/iPhone, altKey ทำให้
-      // shouldColumnSelect เป็นจริงที่นั่นและทำให้ shouldForceSelection เป็นจริงบน iPad
-      // ต้องมีทั้งคู่ ขาดตัวใดตัวหนึ่งไม่พอ
       target.dispatchEvent(new MouseEvent(type, {
-        clientX, clientY, bubbles: true, cancelable: true, view: window,
-        shiftKey: true, altKey: true,
-        button: 0, buttons: type === 'mouseup' ? 0 : 1,
+        ...selectionMouseInit(type, clientX, clientY),
+        view: window,
       }));
     },
 

@@ -223,7 +223,19 @@ function toggleKeyboard(t: Terminal): void {
   }
 }
 
+/**
+ * โหมดเลือกกับคีย์บอร์ดบนจออยู่ด้วยกันไม่ได้
+ *
+ * คีย์บอร์ดที่โผล่มาระหว่างลากจะหด visualViewport ทำให้ทั้ง layout และขนาดเซลล์ที่ใช้
+ * แปลงพิกัดเปลี่ยนกลางการลาก กด ⌨ ระหว่างเลือกจึงถือเป็นการบอกว่า "เลิกเลือกแล้ว
+ * จะพิมพ์" — ออกจากโหมดให้ก่อน ดีกว่าปล่อยให้ปุ่มกดไม่ติดโดยไม่บอกอะไรเลย
+ */
+function leaveSelectionForKeyboard(): void {
+  if (selection?.active()) selection.cancel();
+}
+
 function openKeyboard(t: Terminal): void {
+  leaveSelectionForKeyboard();
   // blur ก่อน focus เสมอ — กรณี "โฟกัสอยู่แต่คีย์บอร์ดถูกซ่อน" การ focus ซ้ำ
   // เฉยๆ ไม่ทำให้ Android เรียกคีย์บอร์ดกลับมา ต้องให้เสีย focus ก่อน
   // และต้องทำทั้งคู่ใน click gesture เดิมเพื่อให้ mobile browser ยอมเปิด IME
@@ -414,12 +426,14 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     e.preventDefault();          // กันเบราว์เซอร์สังเคราะห์ mouse/โฟกัส/ซูมหน้าเว็บเอง
     if (selectionOwnsTouch(e)) {
       const touch = firstTouch(e);
-      // xterm โฟกัส textarea ใน handler ของ mousedown เสมอ ซึ่งบนมือถือแปลว่า
-      // คีย์บอร์ดเด้งขึ้นมาบังพื้นที่ที่ผู้ใช้กำลังพยายามเลือกพอดี — คืนสถานะเหมือน
-      // ที่ tap และ dragStart ทำ
-      const wasVisible = keyboardVisible();
       selection!.pointerDown(touch.clientX, touch.clientY);
-      if (!wasVisible) t.blur();
+      // blur เสมอ ไม่ใช่แค่ตอนที่คีย์บอร์ดปิดอยู่ก่อน — ต่างจาก tap และ dragStart
+      // ที่ตั้งใจคงสถานะเดิมของผู้ใช้ไว้
+      //
+      // xterm เรียก focus() ใน handler ของ mousedown เสมอ ถ้าปล่อยให้คีย์บอร์ดที่
+      // เปิดอยู่ค้างต่อ visualViewport จะหดระหว่างลาก layout ขยับ และ screenMetrics()
+      // ที่ใช้แปลง px → คอลัมน์ ก็เปลี่ยนกลางคัน กรอบที่เลือกจึงวิ่งหนีมือ
+      t.blur();
       return;
     }
     if (e.touches.length >= 2) fontAtPinchStart = t.options.fontSize ?? 13;

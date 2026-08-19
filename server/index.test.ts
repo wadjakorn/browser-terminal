@@ -216,8 +216,29 @@ describe('การบีบอัด WebSocket', () => {
       ws.once('error', reject);
     });
 
-    // frame ใหญ่ถูกบีบ ส่วน frame เล็ก (echo) รอดเพราะ threshold ฝั่ง server
+    // เทสนี้พิสูจน์แค่ว่า negotiate สำเร็จ ไม่ได้พิสูจน์ผลของ threshold
+    // (threshold แค่ตัดสินใจว่าเฟรมไหนจะถูก deflate ก่อนส่ง ไม่กระทบ handshake)
     expect(ws.extensions).toContain('permessage-deflate');
     ws.close();
+  });
+
+  it('เฟรมขาเข้าเกิน maxPayload ถูกปฏิเสธ ไม่ปล่อยให้ inflate จนหน่วยความจำบาน', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/pty?cols=80&rows=24`, {
+      headers: { origin: ORIGIN, cookie: goodCookie() },
+      // ปิด deflate ฝั่ง client เพื่อให้ frame ที่ส่งมีขนาดเท่าที่เขียนจริง —
+      // ทดสอบเพดาน maxPayload ตรงๆ ไม่ให้การบีบอัดมากวนผล
+      perMessageDeflate: false,
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', () => resolve());
+      ws.once('error', reject);
+    });
+
+    const closed = new Promise<number>(resolve => {
+      ws.once('close', code => resolve(code));
+    });
+    ws.send(Buffer.alloc(300 * 1024, 'x')); // เกิน MAX_INBOUND_PAYLOAD (256 KB) ใน index.ts
+    const code = await closed;
+    expect(code).toBe(1009); // ws ปิดด้วย "Message Too Big" ตาม maxPayload
   });
 });

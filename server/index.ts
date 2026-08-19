@@ -132,7 +132,20 @@ export function createServer(cfg: Config) {
   //
   // คง context takeover ไว้ (ค่า default) — dictionary ข้ามเฟรมช่วยได้เยอะกับ
   // ข้อความที่ซ้ำแบบนี้ และแอปนี้จำกัด session เดียว หน่วยความจำจึงไม่ใช่ประเด็น
-  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: { threshold: 1024 } });
+  //
+  // `maxPayload` ต้องตั้งคู่กับการเปิด deflate ข้างบนเสมอ: ดีฟอลต์ของ ws คือ
+  // 100 MB ซึ่งก่อนเปิด deflate ปลอดภัยเพราะต้องมี 100 MB จริงวิ่งบนสายถึงจะ
+  // ชนเพดาน แต่พอเปิด deflate แล้ว server ต้อง inflate เฟรมขาเข้าด้วย และ
+  // `ws` บังคับเพดานนี้ระหว่าง inflate — เพดานจึงกลายเป็นขนาด**หลังคลาย**
+  // ไม่ใช่ขนาดบนสาย เฟรมบีบอัดแค่ราว 100 KB ก็ทำให้ server จองหน่วยความจำ
+  // 100 MB ได้ (amplification) ตั้งค่านี้ให้พอกับ input จริงของแอป (คีย์บอร์ด
+  // และการ paste) ซึ่งไม่กี่ร้อย KB ก็เหลือเฟือแล้ว
+  const MAX_INBOUND_PAYLOAD = 256 * 1024;
+  const wss = new WebSocketServer({
+    noServer: true,
+    perMessageDeflate: { threshold: 1024 },
+    maxPayload: MAX_INBOUND_PAYLOAD,
+  });
 
   http.on('upgrade', (req, socket, head) => {
     const url = req.url ?? '';

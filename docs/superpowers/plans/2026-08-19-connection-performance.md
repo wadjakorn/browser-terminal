@@ -276,6 +276,12 @@ git commit -m "รวม chunk ขาออกแบบ immediate-first เพ�
 1. **เพดานต้องเล็ก** เกณฑ์ความสำเร็จคือ echo ตอนมี output ไหล ต้องใกล้เคียงตอนจอเงียบ (≈ RTT 150 ms) บน cellular ~2 Mbps คิว 32 KB ≈ 130 ms ≈ หนึ่ง RTT พอดี ถ้าตั้งไว้หลักร้อย KB ก็คือยอมให้ echo ช้าเป็นวินาทีตั้งแต่ออกแบบ
 2. **นับเองด้วย callback ไม่ poll `bufferedAmount`** ที่เพดานเล็กขนาดนี้ การ poll ทุก 50 ms ทำให้ลิงก์ว่างรอเปล่าเกือบครึ่งเวลา `ws.send(data, cb)` เรียก callback เมื่อข้อมูลถูกเขียนลง socket จริง — นับ `outstanding` เองจึงทั้งตรงกว่าและไม่ต้องมี timer ให้เคลียร์
 
+3. **`outstanding` นับไบต์ก่อนบีบอัด** `ws` ส่งข้อมูลเข้า sender แล้วค่อย deflate
+   (`node_modules/ws/lib/websocket.js:481`) ดังนั้น 32 KB ที่นับได้อาจเป็นแค่ ~4 KB
+   จริงบนสายเมื่อ output บีบได้ดี ผลคือ pause เร็วกว่าที่จำเป็น — ทิศทางนี้ปลอดภัย
+   (คิวสั้น = echo ดี) แต่ถ้าวัดแล้ว throughput ตกจนน่ารำคาญ ตัวแรกที่ควรขยับคือ
+   `HIGH_WATER` ไม่ใช่รื้อกลไก
+
 **Files:**
 - Modify: `server/outbound.ts` (เพิ่มเข้าไปใน `createOutbound` ที่สร้างใน Task 1)
 - Test: `server/outbound.test.ts` (เพิ่ม describe block ใหม่ต่อท้าย)
@@ -462,7 +468,7 @@ git commit -m "หยุดอ่าน PTY เมื่อคิว ws ยา�
 - Test: `server/pty.test.ts` (เพิ่มเทสต่อท้าย)
 
 **Interfaces:**
-- Consumes: `createOutbound` จาก Task 1-2
+- Consumes: `createOutbound`, `flush()`, `dispose()` จาก Task 1-2
 - Produces: `attachPty(ws, opts)` ลายเซ็นเดิมไม่เปลี่ยน (`{ pid: number }`) — ผู้เรียกใน `server/index.ts` ไม่ต้องแก้
 
 - [ ] **Step 1: เขียนเทสที่ยังไม่ผ่าน**
@@ -585,9 +591,16 @@ import { createOutbound } from './outbound.js';
     // onData ก้อนสุดท้าย ซึ่งยังนอนอยู่ในหน้าต่างรวม chunk — ปิดเลยคือทำ output
     // บรรทัดสุดท้ายหายเงียบๆ (ws จะส่ง close frame ต่อท้ายข้อมูลที่เข้าคิวไว้แล้ว)
     outbound.flush();
+    // ต้อง dispose ตรงนี้ด้วย: `disposed = true` ข้างบนทำให้ `dispose()` ที่ผูกไว้กับ
+    // ws.on('close') early-return ไป outbound จึงไม่มีใครปิดให้ — เหลือ timer ค้าง
+    // และ send callback ที่มาทีหลังจะไป resume PTY ที่ตายไปแล้ว
+    outbound.dispose();
     if (ws.readyState === ws.OPEN) ws.close(1000, `exit:${exitCode}`);
   });
 ```
+
+หมายเหตุลำดับ: `flush()` ต้องมาก่อน `dispose()` เสมอ — `dispose()` ล้าง pending ทิ้ง
+ถ้าสลับกัน output บรรทัดสุดท้ายจะหายด้วยเหตุผลเดียวกับที่พยายามแก้อยู่
 
 - [ ] **Step 4: รันเทสให้ยังผ่าน**
 
@@ -686,7 +699,8 @@ git commit -m "เปิด permessage-deflate เฉพาะ frame ใหญ�
 
 - [ ] **Step 1: เพิ่มหัวข้อใน README.md**
 
-เพิ่มหัวข้อย่อยใต้ส่วนที่พูดถึง WebSocket/PTY:
+เพิ่มเป็นหัวข้อย่อย `###` ใต้ `## สิ่งที่ต้องรู้` (หัวข้อรวมกับดักของโปรเจกต์)
+วางไว้ท้ายหัวข้อนั้น ก่อน `## พัฒนาต่อ`:
 
 ```markdown
 ### ท่อขาออกจาก PTY
@@ -708,6 +722,8 @@ output จาก PTY ไม่ได้ยิงเข้า `ws.send()` ตร�
 ```
 
 - [ ] **Step 2: เพิ่มงานที่เลื่อนออกไปใน TODO.md**
+
+เพิ่มเป็นหัวข้อ `##` ใหม่ วางไว้ก่อน `## รู้ไว้ แก้ที่นี่ไม่ได้` (หัวข้อสุดท้ายของไฟล์):
 
 ```markdown
 ## ประสิทธิภาพการเชื่อมต่อ (เลื่อนออกไป)

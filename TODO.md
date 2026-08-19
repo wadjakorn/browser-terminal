@@ -112,6 +112,17 @@ request ก็กิน fd ได้ (จำกัดที่ 4096 byte แล�
 - `pnpm.onlyBuiltDependencies` (`package.json:31`) มีไว้เพื่อให้ `node-pty` build ได้
   แต่ไม่มีคำอธิบายในไฟล์ ใครลบทิ้งจะเจอ error ที่โยงกลับมาไม่ถูก
 
+## ประสิทธิภาพการเชื่อมต่อ (เลื่อนออกไป)
+
+- **first-load ช้าบน cellular** — `serveStatic()` ส่ง JS 368 KB โดยไม่บีบอัดและไม่มี
+  `Cache-Control`/`ETag` ทั้งที่ชื่อไฟล์เป็น content-hash อยู่แล้ว (gzip เหลือ 95 KB)
+  ของถูกและได้ผลชัด แค่ยังไม่ใช่อาการที่เจอจริง
+- **predictive local echo แบบ mosh** — ชั้นเดียวที่ลด RTT ที่ผู้ใช้รู้สึกได้จริง
+  ต้องรู้ว่า terminal อยู่ใน mode ไหน (`input-pipeline.ts` มีข้อมูลนี้บางส่วนแล้ว)
+  ควรมีตัวเลข baseline จาก key→echo RTT probe ก่อนตัดสินใจลงทุน
+- **protocol flow-control เต็มรูปแบบ (client ack)** — ทำเมื่อพิสูจน์ว่า
+  `bufferedAmount` อย่างเดียวไม่พอ
+
 ## รู้ไว้ แก้ที่นี่ไม่ได้
 
 **เส้นแบ่ง sidebar ของ herdr กว้าง 1 คอลัมน์ (~7.8px)** ทำให้ท่ากดค้างแล้วลาก

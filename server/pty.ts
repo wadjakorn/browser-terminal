@@ -1,5 +1,6 @@
 import * as pty from 'node-pty';
 import type { WebSocket } from 'ws';
+import { createOutbound } from './outbound.js';
 
 export interface PtyOptions {
   shellCmd: string;
@@ -34,18 +35,38 @@ export function attachPty(ws: WebSocket, opts: PtyOptions): { pid: number } {
   });
 
   let disposed = false;
+
+  const outbound = createOutbound(
+    {
+      send: (data, onFlushed) => {
+        // socket ปิดไปแล้วก็ต้องเรียก onFlushed อยู่ดี ไม่งั้น outstanding ค้าง
+        // แล้ว backpressure จะ pause ทิ้งไว้ตลอดกาล
+        if (ws.readyState !== ws.OPEN) { onFlushed(); return; }
+        ws.send(data, () => onFlushed());
+      },
+    },
+    { pause: () => term.pause(), resume: () => term.resume() },
+  );
+
   const dispose = () => {
     if (disposed) return;
     disposed = true;
+    outbound.dispose();
     try { term.kill('SIGHUP'); } catch { /* ตายไปแล้ว */ }
   };
 
-  term.onData(data => {
-    if (ws.readyState === ws.OPEN) ws.send(Buffer.from(data, 'utf8'));
-  });
+  term.onData(data => outbound.push(Buffer.from(data, 'utf8')));
 
   term.onExit(({ exitCode }) => {
     disposed = true;
+    // ต้อง flush ก่อน close เสมอ: onExit มาถึงได้ภายในไม่กี่ไมโครวินาทีหลัง
+    // onData ก้อนสุดท้าย ซึ่งยังนอนอยู่ในหน้าต่างรวม chunk — ปิดเลยคือทำ output
+    // บรรทัดสุดท้ายหายเงียบๆ (ws จะส่ง close frame ต่อท้ายข้อมูลที่เข้าคิวไว้แล้ว)
+    outbound.flush();
+    // ต้อง dispose ตรงนี้ด้วย: `disposed = true` ข้างบนทำให้ `dispose()` ที่ผูกไว้กับ
+    // ws.on('close') early-return ไป outbound จึงไม่มีใครปิดให้ — เหลือ timer ค้าง
+    // และ send callback ที่มาทีหลังจะไป resume PTY ที่ตายไปแล้ว
+    outbound.dispose();
     if (ws.readyState === ws.OPEN) ws.close(1000, `exit:${exitCode}`);
   });
 

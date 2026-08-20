@@ -5,6 +5,7 @@ web/dist/
 .env.*
 !.env.example
 .superpowers/
+.worktrees/
 .session-epoch
 .claude/worktrees/
 .playwright-mcp/

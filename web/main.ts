@@ -623,6 +623,10 @@ async function connect(): Promise<void> {
   };
 
   socket.onclose = ev => {
+    // handler ของ socket เก่าที่ปิดช้ากว่าตัวใหม่เปิด จะมา null ตัวที่ต่อติดอยู่
+    // (เน็ตกระตุกแล้ว reconnect ทับ) อาการคือพิมพ์ไม่ออกทั้งที่จอยังสด
+    // เช็คตัวตนก่อนเสมอ แล้วปล่อยผ่านทั้ง handler ไม่ใช่แค่ข้ามบรรทัด ws = null
+    if (socket !== ws) return;
     ws = null;
     if (ev.code === 4000) {
       stopped = true;

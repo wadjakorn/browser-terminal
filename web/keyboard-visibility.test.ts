@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { isKeyboardVisible, shouldReleaseFocus, type ViewportSample } from './keyboard-visibility.js';
+import {
+  isKeyboardVisible,
+  isPhysicalKeyboardEvent,
+  shouldReleaseFocus,
+  type PhysicalKeySample,
+  type ViewportSample,
+} from './keyboard-visibility.js';
 
 const phone = (over: Partial<ViewportSample> = {}): ViewportSample => ({
   innerHeight: 800, visualHeight: 800, visualOffsetTop: 0,
@@ -69,5 +75,39 @@ describe('shouldReleaseFocus — ปล่อย focus เมื่อ OS ซ่
     expect(shouldReleaseFocus(true, true, true)).toBe(false);
     expect(shouldReleaseFocus(false, false, true)).toBe(false);
     expect(shouldReleaseFocus(false, false, false)).toBe(false);
+  });
+
+  it('คง focus เมื่อ physical keyboard เป็นตัวทำให้ IME หด', () => {
+    expect(shouldReleaseFocus(true, false, true, true)).toBe(false);
+  });
+
+  it('ยังปล่อย focus เมื่อ Android ซ่อน IME โดยไม่มี physical-key marker', () => {
+    expect(shouldReleaseFocus(true, false, true, false)).toBe(true);
+  });
+});
+
+describe('จำแนก event จาก physical keyboard', () => {
+  const key = (over: Partial<PhysicalKeySample> = {}): PhysicalKeySample => ({
+    type: 'keydown', key: 'a', code: 'KeyA', keyCode: 65,
+    isComposing: false, ...over,
+  });
+
+  it.each([
+    ['ตัวอักษร', key()],
+    ['ลูกศร', key({ key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })],
+    ['control chord', key({ key: 'c', code: 'KeyC', keyCode: 67 })],
+    ['numpad', key({ key: 'Enter', code: 'NumpadEnter', keyCode: 13 })],
+  ])('รับ keydown จาก %s', (_name, sample) => {
+    expect(isPhysicalKeyboardEvent(sample)).toBe(true);
+  });
+
+  it.each([
+    ['keyup', key({ type: 'keyup' })],
+    ['composition', key({ isComposing: true })],
+    ['Android IME key code', key({ keyCode: 229 })],
+    ['unidentified key', key({ key: 'Unidentified' })],
+    ['ไม่มี physical code', key({ code: '' })],
+  ])('ปฏิเสธ %s', (_name, sample) => {
+    expect(isPhysicalKeyboardEvent(sample)).toBe(false);
   });
 });

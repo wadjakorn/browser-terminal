@@ -21,6 +21,22 @@ export interface ViewportSample {
   thresholdPx?: number;
 }
 
+export interface PhysicalKeySample {
+  type: string;
+  key: string;
+  code: string;
+  keyCode: number;
+  isComposing: boolean;
+}
+
+export function isPhysicalKeyboardEvent(sample: PhysicalKeySample): boolean {
+  return sample.type === 'keydown'
+    && !sample.isComposing
+    && sample.key !== 'Unidentified'
+    && sample.keyCode !== 229
+    && sample.code !== '';
+}
+
 export function isKeyboardVisible(s: ViewportSample): boolean {
   // เครื่องที่ไม่มี touch ไม่มีคีย์บอร์ดบนจอให้ซ่อน — viewport ไม่มีวันหด
   // ที่นั่น focus คือคำตอบที่ถูก ไม่งั้นปุ่ม ⌨ จะกดปิดไม่ได้เลยบน desktop
@@ -46,6 +62,7 @@ export function isKeyboardVisible(s: ViewportSample): boolean {
  */
 export function shouldReleaseFocus(
   prevVisible: boolean, nextVisible: boolean, focused: boolean,
+  recentPhysicalInput = false,
 ): boolean {
-  return prevVisible && !nextVisible && focused;
+  return prevVisible && !nextVisible && focused && !recentPhysicalInput;
 }

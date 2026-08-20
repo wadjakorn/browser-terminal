@@ -84,15 +84,21 @@ is the gate for relying on this distinction.
 
 ### 3. Preserve focus for the associated viewport transition
 
-When the helper textarea receives a classified physical `keydown`, record its monotonic
-timestamp before xterm handles the event. When a visible-to-hidden viewport transition
-arrives, suppress `t.blur()` only if a classified event was observed in the immediately
-preceding 1,000 ms. Consume that marker after evaluating the transition so it cannot
-mask a later, unrelated IME dismissal.
+When xterm's public synchronous `onKey` event reports a classified physical `keydown`
+**while the IME is visible**, record its monotonic timestamp. Keys received while the
+IME is already hidden cannot cause an IME-retraction transition and must not arm the
+guard. The target-device trace must verify that `onKey` fires before the relevant
+viewport resize. When a visible-to-hidden viewport transition arrives, suppress `t.blur()`
+only if a classified event was observed in the immediately preceding 1,000 ms. Consume
+that marker after evaluating the transition so it cannot mask a later, unrelated IME
+dismissal.
 
 Keep the existing release rule unchanged when there is no recent physical marker.
-Opening or closing the keyboard through the app, entering selection mode, and actual
-textarea blur must clear the marker.
+Actual textarea blur and an IME hidden-to-visible transition must clear the marker;
+those paths already cover app keyboard toggles and selection mode without adding reset
+calls to every `t.blur()` site. Encapsulate the marker in a small pure controller so
+tests exercise complete keydown → viewport
+transition sequences rather than only disconnected predicates.
 
 The 1,000 ms window is not a keyboard mode timeout; it only correlates one key event
 with the asynchronous viewport resize it caused. It is deliberately long enough for a
@@ -120,4 +126,3 @@ model:
 
 No server, PTY, WebSocket, input-pipeline, keybar layout, CSS, or dependency changes are
 needed.
-

@@ -54,33 +54,64 @@
   t.textarea?.addEventListener('keydown', event => traceKeyboard('keydown', event), true);
   t.textarea?.addEventListener('focus', () => traceKeyboard('focus'));
   t.textarea?.addEventListener('blur', () => traceKeyboard('blur'));
-  window.visualViewport?.addEventListener('resize', () => traceKeyboard('viewport-resize'));
+  t.onKey(({ domEvent }) => traceKeyboard('xterm-onKey', domEvent));
   ```
+
+  In the existing `visualViewport.resize` listener, temporarily replace the release
+  call with an explicitly traced decision:
+
+  ```ts
+  const focused = terminalFocused();
+  const release = shouldReleaseFocus(prevVisible, nextVisible, focused);
+  traceKeyboard(`viewport-resize release=${release}`);
+  if (release) {
+    traceKeyboard('application-blur');
+    t.blur();
+  }
+  ```
+
+  This instruments the actual branch under investigation rather than relying on the
+  relative order of independent listeners.
 
 - [ ] **Step 2: Run the app and capture the Bluetooth-keyboard failure**
 
-  Run the server and web processes in separate terminals:
+  Connect the Android device over USB with debugging enabled and forward both loopback
+  development ports:
 
   ```bash
-  pnpm dev:server
-  DEV_ORIGINS=http://localhost:5173 pnpm dev:web
+  adb reverse tcp:5173 tcp:5173
+  adb reverse tcp:7000 tcp:7000
   ```
 
-  On the affected Android device, open the on-screen keyboard, then type at least ten
-  characters and navigation keys on the Bluetooth keyboard. Save the ordered trace from
-  the first physical `keydown` through the unexpected `blur`.
+  Run the server and web processes in separate terminals. `DEV_ORIGINS` belongs to the
+  Node server because that process validates WebSocket origins; it has no effect when
+  attached to Vite:
 
-  Expected evidence for the current hypothesis: a `keydown` with non-empty `code`,
-  `keyCode !== 229`, and `isComposing === false`; then a viewport resize from keyboard
-  visible to hidden; then the application's `blur`.
+  ```bash
+  DEV_ORIGINS=http://localhost:5173 pnpm dev:server
+  pnpm dev:web
+  ```
+
+  Open `http://localhost:5173` on the Android device through the ADB reverse tunnel and
+  attach Chrome remote DevTools to capture the console. This keeps credentials and the
+  shell session on loopback instead of exposing the development server as plaintext on
+  the LAN. Open the on-screen keyboard, then type at least ten characters and navigation
+  keys on the Bluetooth keyboard. Save the ordered trace from the first physical
+  `keydown` through the unexpected `blur`.
+
+  Expected evidence for the current hypothesis: a raw `keydown` and subsequent
+  `xterm-onKey` with non-empty `code`, `keyCode !== 229`, and
+  `isComposing === false`; then
+  `viewport-resize release=true` as the viewport crosses from keyboard visible to
+  hidden; then `application-blur` and the textarea's `blur` event.
 
 - [ ] **Step 3: Capture the explicit Android hide-keyboard control path**
 
   Reopen the IME, do not press the Bluetooth keyboard, and press Android's native
   hide-keyboard control.
 
-  Expected evidence: the same visible-to-hidden viewport transition and application
-  blur, but no preceding qualifying physical `keydown`.
+  Expected evidence: the same `viewport-resize release=true`, `application-blur`, and
+  textarea `blur` sequence, but no preceding qualifying physical `keydown`.
 
 - [ ] **Step 4: Gate the remaining plan on the evidence**
 
@@ -94,7 +125,7 @@
 
 - [ ] **Step 5: Remove all temporary trace code and verify the diff**
 
-  Remove the `traceKeyboard` block and run:
+  Remove the `traceKeyboard` block, restore the original viewport listener, and run:
 
   ```bash
   git diff --check
@@ -155,7 +186,7 @@
 
 - [ ] **Step 2: Add the classifier and release-policy regression matrix**
 
-  Import `isPhysicalKeyboardEvent` and add these cases to
+  Import `isPhysicalKeyboardEvent` and `type PhysicalKeySample`, then add these cases to
   `web/keyboard-visibility.test.ts`:
 
   ```ts
@@ -249,37 +280,87 @@
 
 **Interfaces:**
 - Consumes: `isPhysicalKeyboardEvent(PhysicalKeySample)` and four-argument `shouldReleaseFocus(...)` from Task 2.
-- Produces: a capture-phase keydown marker that is valid for `PHYSICAL_KEY_RESIZE_WINDOW_MS = 1000` and consumed on the next visible-to-hidden viewport transition.
+- Produces: `createPhysicalKeyboardFocusGuard({ now, windowMs? })`, a sequence-tested controller whose marker is armed only by xterm-accepted physical input while the IME is visible, valid for `PHYSICAL_KEY_RESIZE_WINDOW_MS = 1000`, and consumed on the next visible-to-hidden viewport transition.
 
-- [ ] **Step 1: Add a pure timestamp correlation helper and failing tests**
+- [ ] **Step 1: Add the pure controller interface with a deliberately inert implementation**
 
   Add to `web/keyboard-visibility.ts`:
 
   ```ts
   export const PHYSICAL_KEY_RESIZE_WINDOW_MS = 1000;
 
-  export function hasRecentPhysicalInput(
-    physicalInputAt: number | null,
-    now: number,
-    windowMs = PHYSICAL_KEY_RESIZE_WINDOW_MS,
-  ): boolean {
-    return false;
+  export interface PhysicalKeyboardFocusGuard {
+    noteKey(sample: PhysicalKeySample, keyboardVisible: boolean): void;
+    shouldRelease(prevVisible: boolean, nextVisible: boolean, focused: boolean): boolean;
+    reset(): void;
+  }
+
+  export function createPhysicalKeyboardFocusGuard(options: {
+    now: () => number;
+    windowMs?: number;
+  }): PhysicalKeyboardFocusGuard {
+    return {
+      noteKey() {},
+      shouldRelease: (prevVisible, nextVisible, focused) =>
+        shouldReleaseFocus(prevVisible, nextVisible, focused),
+      reset() {},
+    };
   }
   ```
 
-  Add tests proving that a marker at the same time and at 999 ms is recent, while
-  `null`, a future timestamp, and markers 1,001 ms old are not recent:
+  Import `createPhysicalKeyboardFocusGuard` and add sequence tests. Use a mutable clock
+  so no fake timers or browser globals are required:
 
   ```ts
-  describe('physical key to viewport resize correlation', () => {
-    it.each([
-      [1000, 1000, true],
-      [1, 1000, true],
-      [0, 1001, false],
-      [1001, 1000, false],
-      [null, 1000, false],
-    ])('marker %s at time %s => %s', (markedAt, now, expected) => {
-      expect(hasRecentPhysicalInput(markedAt, now)).toBe(expected);
+  describe('physical keyboard focus guard sequences', () => {
+    const physicalA: PhysicalKeySample = {
+      type: 'keydown', key: 'a', code: 'KeyA', keyCode: 65, isComposing: false,
+    };
+
+    function build() {
+      let now = 1000;
+      return {
+        guard: createPhysicalKeyboardFocusGuard({ now: () => now }),
+        advance: (ms: number) => { now += ms; },
+      };
+    }
+
+    it('preserves focus for the IME retraction immediately following a physical key', () => {
+      const { guard } = build();
+      guard.noteKey(physicalA, true);
+      expect(guard.shouldRelease(true, false, true)).toBe(false);
+    });
+
+    it('does not arm from physical keys received while the IME is already hidden', () => {
+      const { guard } = build();
+      guard.noteKey(physicalA, false);
+      expect(guard.shouldRelease(true, false, true)).toBe(true);
+    });
+
+    it('expires the correlation after the viewport animation window', () => {
+      const { guard, advance } = build();
+      guard.noteKey(physicalA, true);
+      advance(1001);
+      expect(guard.shouldRelease(true, false, true)).toBe(true);
+    });
+
+    it('consumes the marker so it cannot mask a second dismissal', () => {
+      const { guard } = build();
+      guard.noteKey(physicalA, true);
+      expect(guard.shouldRelease(true, false, true)).toBe(false);
+      expect(guard.shouldRelease(true, false, true)).toBe(true);
+    });
+
+    it('reset and loss of focus clear a pending marker', () => {
+      const first = build().guard;
+      first.noteKey(physicalA, true);
+      first.reset();
+      expect(first.shouldRelease(true, false, true)).toBe(true);
+
+      const second = build().guard;
+      second.noteKey(physicalA, true);
+      expect(second.shouldRelease(true, true, false)).toBe(false);
+      expect(second.shouldRelease(true, false, true)).toBe(true);
     });
   });
   ```
@@ -290,72 +371,86 @@
   pnpm vitest run web/keyboard-visibility.test.ts
   ```
 
-  Expected: the two recent-marker cases fail.
+  Expected: preservation and controller-state cases fail while existing release-policy
+  tests continue to pass.
 
-- [ ] **Step 3: Implement timestamp correlation**
+- [ ] **Step 3: Implement the one-shot correlation controller**
 
-  Replace the helper body with:
+  Replace the factory body with:
 
   ```ts
-  if (physicalInputAt === null) return false;
-  const age = now - physicalInputAt;
-  return age >= 0 && age <= windowMs;
+  const windowMs = options.windowMs ?? PHYSICAL_KEY_RESIZE_WINDOW_MS;
+  let physicalInputAt: number | null = null;
+
+  return {
+    noteKey(sample, keyboardVisible) {
+      if (keyboardVisible && isPhysicalKeyboardEvent(sample)) {
+        physicalInputAt = options.now();
+      }
+    },
+    shouldRelease(prevVisible, nextVisible, focused) {
+      if (!focused || (!prevVisible && nextVisible)) physicalInputAt = null;
+
+      let recentPhysicalInput = false;
+      if (prevVisible && !nextVisible && physicalInputAt !== null) {
+        const age = options.now() - physicalInputAt;
+        recentPhysicalInput = age >= 0 && age <= windowMs;
+        physicalInputAt = null;
+      }
+
+      return shouldReleaseFocus(
+        prevVisible, nextVisible, focused, recentPhysicalInput,
+      );
+    },
+    reset() { physicalInputAt = null; },
+  };
   ```
 
 - [ ] **Step 4: Wire the marker into `initTerminal()`**
 
-  Import `hasRecentPhysicalInput` and `isPhysicalKeyboardEvent`. Immediately before the
-  existing focus/blur synchronization listeners, add:
+  Import `createPhysicalKeyboardFocusGuard`. Immediately before the existing focus/blur
+  synchronization listeners, add:
 
   ```ts
-  let physicalInputAt: number | null = null;
+  const physicalKeyboardFocus = createPhysicalKeyboardFocusGuard({
+    now: () => performance.now(),
+  });
 
-  t.textarea?.addEventListener('keydown', event => {
-    if (isPhysicalKeyboardEvent(event)) physicalInputAt = performance.now();
-  }, { capture: true });
+  t.onKey(({ domEvent }) => {
+    physicalKeyboardFocus.noteKey(domEvent, keyboardVisible());
+  });
 
   t.textarea?.addEventListener('blur', () => {
-    physicalInputAt = null;
+    physicalKeyboardFocus.reset();
   });
   ```
 
-  In the `visualViewport.resize` listener, compute and consume the marker only for a
-  visible-to-hidden transition:
+  Replace the current release call in the `visualViewport.resize` listener with:
 
   ```ts
-  const transitionHidKeyboard = prevVisible && !nextVisible;
-  const recentPhysicalInput = transitionHidKeyboard
-    && hasRecentPhysicalInput(physicalInputAt, performance.now());
-
-  if (transitionHidKeyboard) physicalInputAt = null;
-  if (shouldReleaseFocus(
-    prevVisible, nextVisible, terminalFocused(), recentPhysicalInput,
+  if (physicalKeyboardFocus.shouldRelease(
+    prevVisible, nextVisible, terminalFocused(),
   )) t.blur();
   ```
 
   Keep `prevVisible = nextVisible` and `syncKeyboardButton()` in their existing order
   after the decision. Do not call `preventDefault`, `stopPropagation`, `ws.send`, or the
   input pipeline from this listener; xterm remains the only encoder for physical keys.
+  The public `onKey` event is observational and does not create another byte path.
 
-- [ ] **Step 5: Clear stale correlation during explicit focus ownership changes**
+- [ ] **Step 5: Verify every explicit focus-loss path reaches the shared reset**
 
-  Beside the existing module-level `resetInputModifiers`, add:
+  Do not add reset calls beside every `t.blur()`. The helper textarea's shared `blur`
+  listener from Step 4 resets the guard for `onRequestKeyboardClose`, selection mode,
+  `toggleKeyboard`, `openKeyboard`, touch gestures, and any browser/xterm-owned focus
+  loss. Trace each current `t.blur()` call in `web/main.ts` and confirm it either blurs
+  the focused helper textarea (therefore firing the listener) or starts with no focused
+  textarea and therefore cannot have an armed marker. Add a comment beside the listener:
 
   ```ts
-  let resetPhysicalInput = (): void => {};
+  // Every app, browser, and xterm focus-loss path converges on this DOM event.
+  t.textarea?.addEventListener('blur', () => physicalKeyboardFocus.reset());
   ```
-
-  After declaring `physicalInputAt` in `initTerminal`, assign:
-
-  ```ts
-  resetPhysicalInput = () => { physicalInputAt = null; };
-  ```
-
-  Call `resetPhysicalInput()` immediately before each explicit `t.blur()` used by
-  `onRequestKeyboardClose`, selection activation, `toggleKeyboard` close, and
-  `openKeyboard`'s blur/focus reset. Use it in the textarea `blur` listener too. This
-  gives the module-level keyboard functions one narrow reset operation without moving
-  physical key encoding or terminal bytes outside xterm.
 
 - [ ] **Step 6: Run focused and full automated verification**
 
@@ -441,3 +536,73 @@
   git add README.md docs/superpowers/plans/2026-08-20-physical-keyboard-focus.md
   git commit -m "docs: explain physical keyboard focus handling"
   ```
+
+## Scrutinize Review History
+
+### Iteration 1
+
+**Verdict before revision:** rework — the proposed marker could outlive the transition
+it was intended to explain, and the tests did not exercise the stateful sequence.
+
+- **Finding:** Every classified hardware key armed the marker, including keys received
+  after the IME was already hidden. **Why it matters:** a stale marker could suppress a
+  later genuine OS hide action. **Evidence:** the original Task 3 keydown listener wrote
+  `physicalInputAt` without consulting `keyboardVisible()`, while consumption occurred
+  only on a later visible-to-hidden transition. **Addressed:** `noteKey` now arms only
+  while the IME is visible.
+- **Finding:** Predicate tests could pass while marker lifecycle wiring remained wrong.
+  **Why it matters:** the bug is an ordering problem across keydown, viewport resize,
+  focus, and reset events. **Evidence:** the original plan tested classification and age
+  separately but had no test for consumption or stale state. **Addressed:** Task 3 now
+  introduces a pure controller with full sequence tests for preservation, expiry,
+  consumption, hidden-IME keys, reset, and focus loss.
+- **Finding:** The test instructions used `PhysicalKeySample` without explicitly
+  importing the type. **Why it matters:** a literal execution of the plan would fail
+  TypeScript compilation. **Evidence:** Task 2 named only the value import.
+  **Addressed:** the plan now calls out both the value and type imports.
+
+### Iteration 2
+
+**Verdict before revision:** fix-then-ship — the proposed code path was testable, but
+the target-device evidence procedure could not reliably reach or identify that path.
+
+- **Finding:** The development commands attached `DEV_ORIGINS` to Vite, although origin
+  validation runs in `server/config.ts` and `server/index.ts`. **Why it matters:** the
+  WebSocket handshake from the Vite origin could still be rejected, preventing a valid
+  reproduction. **Evidence:** `server/config.ts` reads `process.env.DEV_ORIGINS`; Vite
+  never consumes it. **Addressed:** the variable is now applied to `pnpm dev:server`.
+- **Finding:** Opening `http://localhost:5173` on Android addresses the phone itself, not
+  the development machine. **Why it matters:** the plan omitted a usable and safe path
+  to the instrumented build. **Evidence:** Vite and the server bind loopback by default
+  in `vite.config.ts` and `server/config.ts`. **Addressed:** Task 1 now uses `adb reverse`
+  for ports 5173 and 7000 and keeps the security-sensitive terminal session on loopback.
+- **Finding:** Independent resize and blur logs showed ordering but did not prove that
+  `shouldReleaseFocus` caused the blur. **Why it matters:** xterm or another listener
+  could blur in the same interval, producing a false root-cause conclusion. **Evidence:**
+  the original trace listener was separate from `web/main.ts`'s release branch.
+  **Addressed:** the temporary probe now logs the exact decision and immediately logs
+  the application-owned `t.blur()` call.
+
+### Iteration 3
+
+**Verdict before revision:** fix-then-ship — the policy was coherent, but integration
+used lower-level and broader state plumbing than the existing xterm API requires.
+
+- **Finding:** The plan observed physical input by adding another listener directly to
+  xterm's helper textarea. **Why it matters:** that private DOM seam is more coupled to
+  xterm internals and made listener ordering part of correctness. **Evidence:** xterm 6
+  already exposes `Terminal.onKey` in `node_modules/@xterm/xterm/typings/xterm.d.ts`,
+  including the original `domEvent`. **Addressed:** the device trace now verifies
+  `onKey` ordering and production integration uses that public synchronous event.
+- **Finding:** A module-level `resetPhysicalInput` callback and edits around selected
+  `t.blur()` calls duplicated a convergence point that already exists. **Why it matters:**
+  missing any current or future blur call would leave stale state, while touching all
+  callers expands the diff. **Evidence:** app, browser, and xterm focus loss all produce
+  the helper textarea's DOM `blur` event, which `web/main.ts` already observes.
+  **Addressed:** the plan resets once in the shared blur listener and explicitly traces
+  every current `t.blur()` path to validate that assumption.
+- **Finding:** The plan did not prove that the proposed public `onKey` seam precedes the
+  viewport transition on the affected browser. **Why it matters:** a correct classifier
+  is useless if its marker arrives after the release decision. **Evidence:** Task 1 only
+  logged raw textarea keydown. **Addressed:** the trace now records `xterm-onKey`, and
+  implementation remains gated on it occurring before `viewport-resize release=true`.

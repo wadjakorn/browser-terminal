@@ -96,12 +96,17 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
 /* Expansion keeps the existing first row anchored and lets only the keys that
    were beyond its right edge wrap into the newly available area below. */
 .keybar-strip.expanded {
+  --keybar-expanded-height-limit: min(calc(2.75rem + 18rem), calc(2.75rem + 50dvh));
   flex-wrap: wrap;
   align-content: flex-start;
-  max-height: min(calc(2.75rem + 18rem), calc(2.75rem + 50dvh));
+  max-height: var(--keybar-expanded-height-limit);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+.keybar-strip.expanded.customization-sized:not(.keyboard-sized) {
+  height: var(--keybar-expanded-height-limit);
 }
 
 .keybar-strip.expanded.keyboard-sized {

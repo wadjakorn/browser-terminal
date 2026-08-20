@@ -8,10 +8,12 @@ import {
   KEYS,
   keyButtonText,
   keybarSettingsLabel,
+  keybarSizingPresentation,
   keybarSurfaceIds,
   keybarVisibleLabels,
   keybarViewState,
   modifierPresentation,
+  toggleKeybarCustomization,
 } from './keybar.js';
 import { beginExpansion, initialKeyboardSurface } from './keyboard-surface.js';
 import { getKeySpec } from './key-definitions.js';
@@ -108,6 +110,37 @@ describe('modifier presentation', () => {
 });
 
 describe('keybar customization state', () => {
+  it('notifies terminal layout when customization changes panel height', () => {
+    let customizing = false;
+    const applyCustomization = vi.fn((next: boolean) => { customizing = next; });
+    const onLayoutChange = vi.fn();
+
+    toggleKeybarCustomization(customizing, applyCustomization, onLayoutChange);
+    expect(customizing).toBe(true);
+    expect(applyCustomization).toHaveBeenLastCalledWith(true);
+    expect(onLayoutChange).toHaveBeenCalledOnce();
+
+    toggleKeybarCustomization(customizing, applyCustomization, onLayoutChange);
+    expect(customizing).toBe(false);
+    expect(applyCustomization).toHaveBeenLastCalledWith(false);
+    expect(onLayoutChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives keyboard-hidden customization a definite scrollport', () => {
+    expect(keybarSizingPresentation(true, null)).toEqual({
+      keyboardSized: false,
+      customizationSized: true,
+    });
+    expect(keybarSizingPresentation(true, 280)).toEqual({
+      keyboardSized: true,
+      customizationSized: false,
+    });
+    expect(keybarSizingPresentation(false, null)).toEqual({
+      keyboardSized: false,
+      customizationSized: false,
+    });
+  });
+
   it('shows settings and fullscreen only on the expanded sortable surface', () => {
     const preferences = moveKey(defaultKeybarPreferences(), 'fullscreen', -1);
 

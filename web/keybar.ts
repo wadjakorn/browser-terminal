@@ -55,6 +55,26 @@ export function keybarViewState(
   return { expanded, restoring };
 }
 
+export function keybarSizingPresentation(
+  customizing: boolean,
+  measuredHeight: number | null,
+): { keyboardSized: boolean; customizationSized: boolean } {
+  const keyboardSized = measuredHeight !== null;
+  return {
+    keyboardSized,
+    customizationSized: customizing && !keyboardSized,
+  };
+}
+
+export function toggleKeybarCustomization(
+  customizing: boolean,
+  applyCustomization: (next: boolean) => void,
+  onLayoutChange: () => void,
+): void {
+  applyCustomization(!customizing);
+  onLayoutChange();
+}
+
 export function foldAction(state: KeyboardSurfaceState): 'restore-keyboard' | 'close' {
   return restoreKeyboardOnFold(state) ? 'restore-keyboard' : 'close';
 }
@@ -338,6 +358,18 @@ export function mountKeybar(container: HTMLElement, handlers: {
     return panel;
   };
 
+  const applyStripSizing = () => {
+    const measuredHeight = surface.mode === 'collapsed' ? null : surface.panelHeightPx;
+    const sizing = keybarSizingPresentation(customizing, measuredHeight);
+    strip.classList.toggle('keyboard-sized', sizing.keyboardSized);
+    strip.classList.toggle('customization-sized', sizing.customizationSized);
+    if (measuredHeight === null) {
+      strip.style.removeProperty('--keybar-panel-height');
+    } else {
+      strip.style.setProperty('--keybar-panel-height', `${measuredHeight}px`);
+    }
+  };
+
   function render(): void {
     clearRenderedKeyControls();
     settingsButton = undefined;
@@ -347,6 +379,7 @@ export function mountKeybar(container: HTMLElement, handlers: {
     const children: HTMLElement[] = visibleKeys.map(makeKeyButton);
     if (customizing) children.push(makeCustomizePanel());
     strip.replaceChildren(...children);
+    applyStripSizing();
     if (settingsButton) {
       const label = keybarSettingsLabel(customizing);
       settingsButton.classList.toggle('active', customizing);
@@ -360,15 +393,9 @@ export function mountKeybar(container: HTMLElement, handlers: {
   const updateView = () => {
     const occupiesLayout = surface.mode !== 'collapsed';
     const restoring = surface.mode === 'restoring-ime';
-    const measuredHeight = occupiesLayout ? surface.panelHeightPx : null;
 
     applyKeybarView(occupiesLayout, restoring, strip, container);
-    strip.classList.toggle('keyboard-sized', measuredHeight !== null);
-    if (measuredHeight === null) {
-      strip.style.removeProperty('--keybar-panel-height');
-    } else {
-      strip.style.setProperty('--keybar-panel-height', `${measuredHeight}px`);
-    }
+    applyStripSizing();
     strip.inert = restoring;
     strip.setAttribute('aria-hidden', String(restoring));
 
@@ -449,8 +476,14 @@ export function mountKeybar(container: HTMLElement, handlers: {
   moreButton.setAttribute('aria-expanded', 'false');
 
   function toggleCustomization(): void {
-    customizing = !customizing;
-    render();
+    toggleKeybarCustomization(
+      customizing,
+      next => {
+        customizing = next;
+        render();
+      },
+      () => handlers.onPanelChange(true),
+    );
   }
 
   const keyboardButton = makeButton('⌨', () => {

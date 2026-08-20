@@ -5,7 +5,10 @@ import { createInputPipeline } from './input-pipeline.js';
 import { mountKeybar, type MountedKeybar } from './keybar.js';
 import { watchViewport } from './viewport.js';
 import { createGestureRecognizer } from './touch-gestures.js';
-import { isKeyboardVisible, shouldReleaseFocus } from './keyboard-visibility.js';
+import {
+  createPhysicalKeyboardFocusGuard,
+  isKeyboardVisible,
+} from './keyboard-visibility.js';
 import { fitAndSendResize } from './terminal-resize.js';
 import { createTextSelection, selectionMouseInit, type TerminalPort } from './text-selection.js';
 import { createSelectionSheet } from './selection-sheet.js';
@@ -159,6 +162,14 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     );
   };
 
+  const physicalKeyboardFocus = createPhysicalKeyboardFocusGuard({
+    now: () => performance.now(),
+  });
+
+  t.onKey(({ domEvent }) => {
+    physicalKeyboardFocus.noteKey(domEvent, keyboardVisible());
+  });
+
   /**
    * ยามกันคีย์บอร์ดเด้งระหว่างโหมดเลือก
    *
@@ -184,6 +195,8 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   // sync สถานะปุ่มจากทุกทางที่สถานะเปลี่ยนได้โดยไม่ผ่าน toggleKeyboard ของเรา
   t.textarea?.addEventListener('focus', syncKeyboardButton);
   t.textarea?.addEventListener('blur', syncKeyboardButton);
+  // ทุกทางที่แอป เบราว์เซอร์ หรือ xterm ทำ focus หลุดจะมารวมที่ DOM event นี้
+  t.textarea?.addEventListener('blur', () => physicalKeyboardFocus.reset());
 
   // ผู้ใช้ปิดคีย์บอร์ดด้วยปุ่มของ OS = viewport ขยายกลับ แต่ textarea ยังโฟกัสอยู่
   // ต้องปล่อย focus ทิ้งเองตรงนี้ ไม่งั้นการแตะหรือปัดจอครั้งถัดไปจะทำให้ Android
@@ -193,7 +206,9 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     let prevVisible = keyboardVisible();
     vv.addEventListener('resize', () => {
       const nextVisible = keyboardVisible();
-      if (shouldReleaseFocus(prevVisible, nextVisible, terminalFocused())) t.blur();
+      if (physicalKeyboardFocus.shouldRelease(
+        prevVisible, nextVisible, terminalFocused(),
+      )) t.blur();
       prevVisible = nextVisible;
       syncKeyboardButton();
     });

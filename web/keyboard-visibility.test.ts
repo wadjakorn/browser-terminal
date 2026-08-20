@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  createPhysicalKeyboardFocusGuard,
   isKeyboardVisible,
   isPhysicalKeyboardEvent,
   shouldReleaseFocus,
@@ -109,5 +110,57 @@ describe('จำแนก event จาก physical keyboard', () => {
     ['ไม่มี physical code', key({ code: '' })],
   ])('ปฏิเสธ %s', (_name, sample) => {
     expect(isPhysicalKeyboardEvent(sample)).toBe(false);
+  });
+});
+
+describe('ลำดับ event ของ physical keyboard focus guard', () => {
+  const physicalA: PhysicalKeySample = {
+    type: 'keydown', key: 'a', code: 'KeyA', keyCode: 65, isComposing: false,
+  };
+
+  function build() {
+    let now = 1000;
+    return {
+      guard: createPhysicalKeyboardFocusGuard({ now: () => now }),
+      advance: (ms: number) => { now += ms; },
+    };
+  }
+
+  it('คง focus เมื่อ IME หดทันทีหลัง physical key', () => {
+    const { guard } = build();
+    guard.noteKey(physicalA, true);
+    expect(guard.shouldRelease(true, false, true)).toBe(false);
+  });
+
+  it('ไม่ arm จาก physical key ที่เกิดตอน IME ซ่อนอยู่แล้ว', () => {
+    const { guard } = build();
+    guard.noteKey(physicalA, false);
+    expect(guard.shouldRelease(true, false, true)).toBe(true);
+  });
+
+  it('หมดอายุ correlation หลัง viewport animation window', () => {
+    const { guard, advance } = build();
+    guard.noteKey(physicalA, true);
+    advance(1001);
+    expect(guard.shouldRelease(true, false, true)).toBe(true);
+  });
+
+  it('ใช้ marker ได้ครั้งเดียวจึงไม่บัง dismissal ครั้งต่อไป', () => {
+    const { guard } = build();
+    guard.noteKey(physicalA, true);
+    expect(guard.shouldRelease(true, false, true)).toBe(false);
+    expect(guard.shouldRelease(true, false, true)).toBe(true);
+  });
+
+  it('reset และ focus loss ล้าง marker ที่ค้างอยู่', () => {
+    const first = build().guard;
+    first.noteKey(physicalA, true);
+    first.reset();
+    expect(first.shouldRelease(true, false, true)).toBe(true);
+
+    const second = build().guard;
+    second.noteKey(physicalA, true);
+    expect(second.shouldRelease(true, true, false)).toBe(false);
+    expect(second.shouldRelease(true, false, true)).toBe(true);
   });
 });

@@ -1,6 +1,5 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { createInputPipeline } from './input-pipeline.js';
 import { mountKeybar, type MountedKeybar } from './keybar.js';
@@ -77,6 +76,7 @@ function backToLogin(): void {
 
 /** ตั้งค่าใน initTerminal และใช้ต่อใน bindTouch ซึ่งถูกเรียกหลังจากนั้น */
 let linkOpener: LinkOpener | null = null;
+let linkPort: TerminalPort | null = null;
 
 function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar } {
   const t = new Terminal({
@@ -97,21 +97,6 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   const fit = new FitAddon();
   t.loadAddon(fit);
   t.open($('terminal'));
-
-  // WebLinksAddon ทำหน้าที่หา URL ในบัฟเฟอร์ให้ (รวม URL ที่ตัดข้ามบรรทัด ซึ่งเป็น
-  // เคสปกติของเพนแคบๆ ใน herdr) เราใช้แค่ hover/leave ของมันเป็นตัวบอกว่าตรงไหน
-  // เป็นลิงก์ ส่วนการเปิดจริงเราทำเองใน links.ts — ดูเหตุผลในหัวไฟล์นั้น
-  linkOpener = createLinkOpener({
-    open: url => { window.open(url, '_blank', 'noopener,noreferrer'); },
-  });
-  //
-  // activate เป็น no-op โดยตั้งใจ: เรากลืน mousedown ก่อนถึง linkifier เสมอเมื่อมี
-  // ลิงก์อยู่ใต้เคอร์เซอร์ (ดู bindTouch) ทางนี้จึงไม่ควรถูกเรียก และถ้าถูกเรียก
-  // การเปิดซ้ำจะกลายเป็นสองแท็บ
-  t.loadAddon(new WebLinksAddon(() => {}, {
-    hover: (_event, uri) => linkOpener?.onHover(uri),
-    leave: () => linkOpener?.onLeave(),
-  }));
 
   const pipeline = createInputPipeline({
     send: bytes => { if (ws?.readyState === WebSocket.OPEN) ws.send(bytes); },
@@ -208,8 +193,15 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   });
   $('app').append(sheet.element);
 
+  const port = createTerminalPort(t, el, t.element ?? el);
+  linkPort = port;
+  linkOpener = createLinkOpener({
+    terminal: port,
+    open: url => { window.open(url, '_blank', 'noopener,noreferrer'); },
+  });
+
   selection = createTextSelection({
-    terminal: createTerminalPort(t, el, t.element ?? el),
+    terminal: port,
     loadPrefs: columns => loadSelectionPrefs(columns),
     onRegionPicked: text => sheet.open(text),
     onModeChange: active => {
@@ -361,16 +353,19 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
   });
 
   /**
-   * linkifier ของ xterm ผูก mousemove ไว้กับ `.xterm-screen` ไม่ใช่ `t.element`
-   * ยิง mousemove ใส่ element แม่จึงไม่มีทางถึงมัน เพราะอีเวนต์ bubble ขึ้นเท่านั้น
-   * (ยืนยันในบราวเซอร์จริง: ยิงใส่ `.xterm` ไม่เกิด hover เลย ยิงใส่ `.xterm-screen`
-   * ได้ URL เต็มกลับมาแม้ URL จะถูกตัดข้ามบรรทัด)
+   * px บนจอ → เซลล์ในบัฟเฟอร์ คืน null เมื่อยังวัดขนาดไม่ได้ (ยังไม่วาดเฟรมแรก)
    *
-   * ส่วน mousedown/mouseup ของการแตะยังยิงใส่ `target` ตามเดิม เพราะนั่นคือทางที่
-   * ทำให้ herdr ได้ mouse report — คนละ element คนละหน้าที่ อย่ารวบเป็นตัวเดียว
+   * เลขชุดเดียวกับที่ text-selection.ts ใช้ ต้องอ่าน rect สดทุกครั้งเพราะแถบปุ่มที่
+   * กางออกและคีย์บอร์ดที่โผล่ขึ้นมาย้ายตำแหน่งจอได้
    */
-  const linkProbeTarget = (): HTMLElement =>
-    (target.querySelector('.xterm-screen') as HTMLElement | null) ?? target;
+  const cellAt = (clientX: number, clientY: number): { line: number; column: number } | null => {
+    if (!linkPort) return null;
+    const { cellWidth, cellHeight, left, top } = linkPort.screenMetrics();
+    if (!(cellWidth > 0) || !(cellHeight > 0)) return null;
+    const column = Math.min(linkPort.columns - 1, Math.max(0, Math.floor((clientX - left) / cellWidth)));
+    const row = Math.min(linkPort.rows - 1, Math.max(0, Math.floor((clientY - top) / cellHeight)));
+    return { line: linkPort.viewportTop() + row, column };
+  };
 
   /** ความสูงหนึ่งบรรทัดจริงบนจอ — เปลี่ยนตาม pinch zoom จึงต้องวัดสดทุกครั้ง */
   const cellHeight = (): number => {
@@ -407,7 +402,7 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
           // ลิงก์จะไม่มีวันถูกพบด้วยการแตะ เพราะ touchstart ถูก preventDefault ไว้
           // แล้วบราวเซอร์ไม่สังเคราะห์ mouse event ให้เลย
           const opened = linkOpener?.handleTap(
-            () => linkProbeTarget().dispatchEvent(new MouseEvent('mousemove', mouseInit(g.x, g.y, { buttons: 0 }))),
+            cellAt(g.x, g.y),
             () => {
               target.dispatchEvent(new MouseEvent('mousedown', mouseInit(g.x, g.y, { button: 0, buttons: 1 })));
               target.dispatchEvent(new MouseEvent('mouseup', mouseInit(g.x, g.y, { button: 0, buttons: 0 })));
@@ -491,7 +486,7 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
   // ดักในเฟส capture เพื่อกลืนอีเวนต์ก่อนถึง xterm เมื่อมีลิงก์อยู่ใต้เคอร์เซอร์
   // ให้พฤติกรรมตรงกับการแตะ: คลิกลิงก์ = เปิดลิงก์อย่างเดียว ไม่สลับ pane
   target.addEventListener('mousedown', e => {
-    if (!linkOpener?.handleMouseDown()) return;
+    if (!linkOpener?.handleMouseDown(cellAt(e.clientX, e.clientY))) return;
     e.preventDefault();
     e.stopPropagation();
   }, { capture: true });

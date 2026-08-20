@@ -126,7 +126,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   return {
     password,
     sessionSecret,
-    shellCmd: env.SHELL_CMD || 'herdr',
+    // trim ก่อนเสมอ: ช่องว่างต่อท้ายใน .env มองไม่เห็นด้วยตา แต่ทำให้ spawn
+    // คำสั่งชื่อ "bash " แล้วตายด้วย ENOENT ที่โยงกลับมาหาสาเหตุไม่ได้เลย
+    shellCmd: env.SHELL_CMD?.trim() || 'herdr',
     host: env.HOST || '127.0.0.1',
     port: parsePort(env.PORT),
     publicOrigin: origin.origin,

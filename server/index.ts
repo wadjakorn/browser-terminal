@@ -26,12 +26,24 @@ const MIME: Record<string, string> = {
   '.ico': 'image/x-icon',
 };
 
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+export const MAX_BODY_BYTES = 4096;
+
+/**
+ * ต้อง `destroy()` ก่อน throw เสมอ ไม่ใช่แค่เลิกอ่าน
+ *
+ * การ throw ออกจาก `for await` หยุดแค่ฝั่งเรา ฝั่งที่ส่งยังไถ byte ต่อไปจนหมด
+ * หรือจน timeout โดยที่ socket ยังถูกจองอยู่ ยิงพร้อมกันหลาย request ก็กิน fd
+ * ได้ฟรี ๆ (เพดาน 4096 byte ทำให้ไม่ใช่ช่องกินหน่วยความจำ แต่เป็นช่องกิน fd)
+ */
+export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const c of req) {
     size += (c as Buffer).length;
-    if (size > 4096) throw new Error('body ใหญ่เกินไป');
+    if (size > MAX_BODY_BYTES) {
+      req.destroy();
+      throw new Error('body ใหญ่เกินไป');
+    }
     chunks.push(c as Buffer);
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));

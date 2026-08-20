@@ -289,6 +289,10 @@ recognizer ไม่รวบสองแตะเป็นท่าของต
 - **การลากต้องตั้ง `buttons: 1` บน `mousemove` ด้วย ไม่ใช่แค่ `mousedown`** — xterm
   แยก "ลากทั้งที่กดปุ่มอยู่" ออกจาก "เลื่อนเมาส์เฉยๆ" ด้วยฟิลด์นี้ล้วนๆ และ listener
   ของการลากอยู่ที่ `document` ไม่ใช่ที่ `term.element`
+- **CSP ยอม `'unsafe-inline'` เฉพาะ `style-src`** — xterm ฉีด `<style>` ของตัวเอง
+  ตอน render ถ้าตัดออกเทอร์มินัลจะเพี้ยนทั้งจอโดยไม่มี error ให้เห็น ส่วน `script-src`
+  ไม่ยอม inline และต้องคงไว้แบบนั้น (`web/index.html` ไม่มี inline script อยู่แล้ว)
+  ชุด header ทั้งหมดอยู่ใน `SECURITY_HEADERS` (`server/index.ts`) ที่เดียว
 - **ห้ามใช้ `@xterm/addon-attach`** — มันข้าม `input-pipeline.ts` ทั้งก้อน
   ใช้เมื่อไหร่แถวปุ่มมือถือพังทันที
 - **ห้ามเพิ่ม `addon-canvas` / `addon-webgl`** — DOM renderer คือเหตุผลเดียวที่ทั้ง

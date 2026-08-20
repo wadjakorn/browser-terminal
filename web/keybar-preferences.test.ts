@@ -31,10 +31,20 @@ describe('keybar preferences', () => {
       order: expect.arrayContaining(['esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'shift-tab', 'shift', 'alt', 'interrupt', 'select', 'paste', 'pipe', 'tilde', 'slash', 'dash', 'page-up', 'delete', 'f12', 'ctrl-z']),
       hidden: expect.arrayContaining(['page-up', 'delete', 'f12', 'ctrl-z']),
     });
-    expect(visibleKeyIds(defaultKeybarPreferences()).slice(0, 17)).toEqual([
+    expect(visibleKeyIds(defaultKeybarPreferences()).slice(0, 19)).toEqual([
       'esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
-      'shift-tab', 'shift', 'alt', 'interrupt', 'select', 'paste', 'pipe', 'tilde', 'slash', 'dash',
+      'shift-tab', 'shift', 'alt', 'interrupt', 'select', 'paste', 'settings', 'fullscreen',
+      'pipe', 'tilde', 'slash', 'dash',
     ]);
+  });
+
+  it('adds the expanded settings and fullscreen tools to the sortable order', () => {
+    const preferences = defaultKeybarPreferences();
+
+    expect(preferences.order.slice(13, 19)).toEqual([
+      'settings', 'fullscreen', 'pipe', 'tilde', 'slash', 'dash',
+    ]);
+    expect(visibleKeyIds(preferences)).toEqual(expect.arrayContaining(['settings', 'fullscreen']));
   });
 
   it('filters unknown IDs and appends every missing catalog ID in catalog order', () => {
@@ -96,7 +106,13 @@ describe('keybar preferences', () => {
       prefs = setKeyHidden(prefs, id, true);
     }
     const stillVisible = setKeyHidden(prefs, 'esc', true);
-    expect(visibleKeyIds(stillVisible)).toEqual(['esc']);
+    expect(visibleKeyIds(stillVisible)).toEqual(['esc', 'settings']);
+  });
+
+  it('keeps settings visible so customization cannot become inaccessible', () => {
+    const hidden = setKeyHidden(defaultKeybarPreferences(), 'settings', true);
+
+    expect(visibleKeyIds(hidden)).toContain('settings');
   });
 
   it('loads invalid JSON as defaults and save/reset round-trips', () => {

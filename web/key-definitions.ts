@@ -9,6 +9,7 @@ export type KeyCategory = 'core' | 'navigation' | 'editing' | 'symbols' | 'funct
  * มันไม่ควรรู้จักโหมดของ UI เลย ปุ่มที่มี action จะไม่ผ่าน input-pipeline
  */
 export type KeyAction = 'select-mode' | 'paste';
+export type KeyUtility = 'settings' | 'fullscreen';
 
 export interface KeySpec {
   id: string;
@@ -17,9 +18,10 @@ export interface KeySpec {
   icon?: string;
   title: string;
   category: KeyCategory;
-  /** ปุ่มหนึ่งมีได้อย่างใดอย่างหนึ่งระหว่าง key กับ action เท่านั้น */
+  /** ปุ่มหนึ่งมีได้อย่างใดอย่างหนึ่งระหว่าง key, action, utility เท่านั้น */
   key?: BarKey;
   action?: KeyAction;
+  utility?: KeyUtility;
   /** ปุ่มที่มีสถานะติด/ดับ — keybar จะถามสถานะมาทาสี */
   toggle?: boolean;
   defaultVisible: boolean;
@@ -92,6 +94,14 @@ export const KEY_CATALOG: readonly KeySpec[] = [
   {
     id: 'paste', label: '⎘', title: 'Paste from clipboard', category: 'core',
     action: 'paste', defaultVisible: true, defaultOrder: 117,
+  },
+  {
+    id: 'settings', label: '⚙', title: 'Customize terminal keys', category: 'core',
+    utility: 'settings', defaultVisible: true, defaultOrder: 118,
+  },
+  {
+    id: 'fullscreen', label: '⛶', title: 'เข้าสู่เต็มหน้าจอ', category: 'core',
+    utility: 'fullscreen', defaultVisible: true, defaultOrder: 119,
   },
   { id: 'pipe', label: '|', title: 'Pipe', category: 'symbols', key: { kind: 'literal', data: '|' }, defaultVisible: true, defaultOrder: 120 },
   { id: 'tilde', label: '~', title: 'Tilde', category: 'symbols', key: { kind: 'literal', data: '~' }, defaultVisible: true, defaultOrder: 130 },

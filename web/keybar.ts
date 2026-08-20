@@ -34,7 +34,7 @@ import {
 
 export type ButtonSpec = KeySpec;
 export { KEY_TARGET_PX, isRepeatableKey };
-export const KEYS = resolveKeySpecs(DEFAULT_KEY_IDS);
+export const KEYS = resolveKeySpecs(DEFAULT_KEY_IDS).filter(spec => spec.utility === undefined);
 
 export function modifierPresentation(label: string, mode: ModifierMode): {
   pressed: boolean;
@@ -104,6 +104,10 @@ export function keybarVisibleLabels(preferences: KeybarPreferences): string[] {
   return resolveKeySpecs(visibleKeyIds(preferences)).map(key => key.label);
 }
 
+export function keybarSurfaceIds(preferences: KeybarPreferences, expanded: boolean): string[] {
+  return visibleKeyIds(preferences).filter(id => expanded || (id !== 'settings' && id !== 'fullscreen'));
+}
+
 export function keybarSettingsLabel(customizing: boolean): string {
   return customizing ? 'Close key customization' : 'Customize terminal keys';
 }
@@ -140,6 +144,8 @@ export function mountKeybar(container: HTMLElement, handlers: {
   let transitionTimer: ReturnType<typeof setTimeout> | undefined;
   let preferences: KeybarPreferences = loadKeybarPreferences();
   let customizing = false;
+  let settingsButton: HTMLButtonElement | undefined;
+  let fullscreenButton: HTMLButtonElement | undefined;
   const modifierButtons = new Map<ModifierName, HTMLButtonElement[]>();
   const toggleButtons = new Map<KeyAction, HTMLButtonElement[]>();
   const cancelRepeats: Array<() => void> = [];
@@ -218,7 +224,9 @@ export function mountKeybar(container: HTMLElement, handlers: {
 
   const makeKeyButton = (spec: KeySpec) => {
     const activate = () => {
-      if (spec.action) handlers.onAction(spec.action);
+      if (spec.utility === 'settings') toggleCustomization();
+      else if (spec.utility === 'fullscreen') handlers.onToggleFullscreen();
+      else if (spec.action) handlers.onAction(spec.action);
       else if (spec.key) handlers.onKey(spec.key);
       refresh();
     };
@@ -242,6 +250,12 @@ export function mountKeybar(container: HTMLElement, handlers: {
     }
     if (spec.key?.kind === 'modifier') registerModifier(spec.key.name, button);
     if (spec.toggle && spec.action) registerToggle(spec.action, button);
+    if (spec.utility === 'settings') settingsButton = button;
+    if (spec.utility === 'fullscreen') {
+      fullscreenButton = button;
+      const state = handlers.fullscreenState();
+      applyFullscreenButton(button, state.supported, state.active);
+    }
     return button;
   };
 
@@ -253,8 +267,6 @@ export function mountKeybar(container: HTMLElement, handlers: {
   controls.className = 'keybar-controls';
 
   let moreButton: HTMLButtonElement;
-  let settingsButton: HTMLButtonElement;
-
   const cancelAllRepeats = () => {
     for (const cancel of cancelRepeats) cancel();
     for (const cancel of cancelRenderedRepeats) cancel();
@@ -295,6 +307,7 @@ export function mountKeybar(container: HTMLElement, handlers: {
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.checked = !hidden.has(spec.id);
+      checkbox.disabled = spec.utility === 'settings';
       checkbox.addEventListener('pointerdown', event => event.preventDefault());
       checkbox.addEventListener('change', () => {
         applyPreferences(setKeyHidden(preferences, spec.id, !checkbox.checked));
@@ -327,7 +340,10 @@ export function mountKeybar(container: HTMLElement, handlers: {
 
   function render(): void {
     clearRenderedKeyControls();
-    const visibleKeys = resolveKeySpecs(visibleKeyIds(preferences));
+    settingsButton = undefined;
+    fullscreenButton = undefined;
+    const expanded = surface.mode === 'expanded' || surface.mode === 'replacing-ime';
+    const visibleKeys = resolveKeySpecs(keybarSurfaceIds(preferences, expanded));
     const children: HTMLElement[] = visibleKeys.map(makeKeyButton);
     if (customizing) children.push(makeCustomizePanel());
     strip.replaceChildren(...children);
@@ -360,7 +376,7 @@ export function mountKeybar(container: HTMLElement, handlers: {
     moreButton.classList.toggle('active', expanded);
     moreButton.setAttribute('aria-expanded', String(expanded));
     moreButton.disabled = restoring;
-    settingsButton.disabled = restoring;
+    if (settingsButton) settingsButton.disabled = restoring;
   };
 
   const clearTransitionTimer = () => {
@@ -426,34 +442,16 @@ export function mountKeybar(container: HTMLElement, handlers: {
     handlers.onRequestKeyboardClose();
     handlers.onPanelChange(true);
     if (surface.mode === 'replacing-ime') finishTransitionAfterTimeout();
+    render();
   });
   moreButton.title = 'แสดง/ซ่อนปุ่มทั้งหมด';
   moreButton.setAttribute('aria-label', 'แสดง/ซ่อนปุ่มทั้งหมด');
   moreButton.setAttribute('aria-expanded', 'false');
 
-  settingsButton = makeButton('⚙', () => {
+  function toggleCustomization(): void {
     customizing = !customizing;
-    if (customizing && surface.mode === 'collapsed') {
-      const viewport = handlers.viewport();
-      const startingPanelHeight = viewport.keyboardVisible
-        ? parseFloat(getComputedStyle(container).marginBottom) || 0
-        : 0;
-      surface = beginExpansion(
-        surface,
-        viewport.keyboardVisible,
-        viewport.visualHeight,
-        startingPanelHeight,
-      );
-      updateView();
-      handlers.onRequestKeyboardClose();
-      handlers.onPanelChange(true);
-      if (surface.mode === 'replacing-ime') finishTransitionAfterTimeout();
-    }
     render();
-  });
-  settingsButton.title = keybarSettingsLabel(false);
-  settingsButton.setAttribute('aria-label', keybarSettingsLabel(false));
-  settingsButton.setAttribute('aria-expanded', 'false');
+  }
 
   const keyboardButton = makeButton('⌨', () => {
     const restoringPanel = surface.mode !== 'collapsed';
@@ -465,13 +463,12 @@ export function mountKeybar(container: HTMLElement, handlers: {
   });
   keyboardButton.title = 'เปิด/ปิดคีย์บอร์ด';
   keyboardButton.setAttribute('aria-label', 'เปิด/ปิดคีย์บอร์ด');
-  const fullscreenButton = makeButton('⛶', handlers.onToggleFullscreen);
   const syncFullscreen = () => {
+    if (!fullscreenButton) return;
     const state = handlers.fullscreenState();
     applyFullscreenButton(fullscreenButton, state.supported, state.active);
   };
-  syncFullscreen();
-  controls.append(moreButton, settingsButton, fullscreenButton, keyboardButton);
+  controls.append(moreButton, keyboardButton);
 
   const row = document.createElement('div');
   row.className = 'keybar-row';

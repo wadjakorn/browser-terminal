@@ -11,6 +11,8 @@ export interface KeybarPreferences {
 const CATALOG_IDS = new Set(KEY_CATALOG.map(key => key.id));
 const ALL_IDS = [...ALL_KEY_IDS];
 const DEFAULT_VISIBLE_IDS = new Set(DEFAULT_KEY_IDS);
+const REQUIRED_VISIBLE_IDS = new Set(['settings']);
+const UTILITY_IDS = new Set(['settings', 'fullscreen']);
 
 export function defaultKeybarPreferences(): KeybarPreferences {
   return {
@@ -102,7 +104,9 @@ export function moveKey(preferences: KeybarPreferences, keyId: string, direction
 export function setKeyHidden(preferences: KeybarPreferences, keyId: string, hidden: boolean): KeybarPreferences {
   const normalized = normalizeKeybarPreferences(preferences);
   if (!CATALOG_IDS.has(keyId)) return normalized;
-  if (hidden && visibleKeyIds(normalized).length === 1 && !normalized.hidden.includes(keyId)) {
+  if (hidden && REQUIRED_VISIBLE_IDS.has(keyId)) return normalized;
+  const visibleTerminalIds = visibleKeyIds(normalized).filter(id => !UTILITY_IDS.has(id));
+  if (hidden && !UTILITY_IDS.has(keyId) && visibleTerminalIds.length === 1 && !normalized.hidden.includes(keyId)) {
     return normalized;
   }
   const hiddenIds = new Set(normalized.hidden);

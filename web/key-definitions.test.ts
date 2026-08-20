@@ -14,13 +14,14 @@ describe('key catalog', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(DEFAULT_KEY_IDS).toEqual([
       'esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
-      'shift-tab', 'shift', 'alt', 'interrupt', 'select', 'paste', 'pipe', 'tilde', 'slash', 'dash',
+      'shift-tab', 'shift', 'alt', 'interrupt', 'select', 'paste', 'settings', 'fullscreen',
+      'pipe', 'tilde', 'slash', 'dash',
     ]);
     expect(ALL_KEY_IDS.slice(0, DEFAULT_KEY_IDS.length)).toEqual(DEFAULT_KEY_IDS);
     expect(ALL_KEY_IDS).toEqual(KEY_CATALOG.map(key => key.id));
     expect(resolveKeySpecs(DEFAULT_KEY_IDS).map(key => key.label)).toEqual([
       'Esc', 'Tab', 'Ctrl', '↑', '↓', '←', '→', 'Shift Tab', 'Shift',
-      'Alt', '^C', '⧉', '⎘', '|', '~', '/', '-',
+      'Alt', '^C', '⧉', '⎘', '⚙', '⛶', '|', '~', '/', '-',
     ]);
   });
 
@@ -28,7 +29,11 @@ describe('key catalog', () => {
     // guard นี้ดักปุ่มที่จะเพิ่มในอนาคตซึ่งเผลอใส่ทั้งสองอย่าง — ปุ่มแบบนั้นจะทั้ง
     // ส่งไบต์เข้า terminal และสั่งงาน UI พร้อมกัน ซึ่งไม่มีใครตั้งใจ
     for (const spec of KEY_CATALOG) {
-      expect([spec.key !== undefined, spec.action !== undefined].filter(Boolean)).toHaveLength(1);
+      expect([
+        spec.key !== undefined,
+        spec.action !== undefined,
+        spec.utility !== undefined,
+      ].filter(Boolean)).toHaveLength(1);
     }
   });
 

@@ -8,6 +8,7 @@ import {
   KEYS,
   keyButtonText,
   keybarSettingsLabel,
+  keybarSurfaceIds,
   keybarVisibleLabels,
   keybarViewState,
   modifierPresentation,
@@ -107,6 +108,17 @@ describe('modifier presentation', () => {
 });
 
 describe('keybar customization state', () => {
+  it('shows settings and fullscreen only on the expanded sortable surface', () => {
+    const preferences = moveKey(defaultKeybarPreferences(), 'fullscreen', -1);
+
+    expect(keybarSurfaceIds(preferences, false)).not.toEqual(
+      expect.arrayContaining(['settings', 'fullscreen']),
+    );
+    expect(keybarSurfaceIds(preferences, true).slice(13, 15)).toEqual([
+      'fullscreen', 'settings',
+    ]);
+  });
+
   it('reports visible labels after hide and reorder preferences', () => {
     const hidden = setKeyHidden(defaultKeybarPreferences(), 'tab', true);
     const moved = moveKey(hidden, 'dash', -1);

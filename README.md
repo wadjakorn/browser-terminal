@@ -280,12 +280,14 @@ recognizer ไม่รวบสองแตะเป็นท่าของต
   เมื่อไม่มี header (เพราะเบราว์เซอร์ส่งมาเสมอตอน upgrade)
 - **`focus` ไม่ใช่ตัวชี้วัดว่าคีย์บอร์ดบนจอเปิดอยู่** — Android ซ่อนคีย์บอร์ดโดยไม่ blur
   ใช้ `keyboard-visibility.ts` ที่วัดจาก `visualViewport` เท่านั้น
-- **physical keyboard ต้องไม่เสีย focus ตอน Android หด IME** — input จาก Bluetooth
-  keyboard อาจตามด้วย `visualViewport` ที่เปลี่ยนจากเห็น → ซ่อนเหมือนกับปุ่มซ่อน
-  คีย์บอร์ดของ Android แต่กรณีแรกต้องคง helper textarea ของ xterm ไว้ ส่วนกรณีหลัง
-  ยังต้องปล่อย focus ตัวชี้วัดที่เชื่อถือได้คือ `onData` ซึ่งแปลว่า xterm รับ input
-  แล้ว ไม่ใช่ชนิดของ DOM keyboard event หรือสถานะ viewport ณ ตอนนั้น ดู one-shot
-  correlation ใน `keyboard-visibility.ts`
+- **terminal focus กับการมองเห็น IME เป็นคนละสถานะ** — physical mode โฟกัส xterm ด้วย
+  `inputMode="none"`; ปุ่ม `⌨` เข้าและออก soft mode อย่างชัดเจนด้วย synchronous focus
+  cycle; การปิด IME ด้วยปุ่มของระบบกลับไป physical mode โดยไม่ blur; และการเลือกข้อความ
+  จะ suspend terminal focus ไม่มี global key capture ดังนั้น form input จริงยังเป็นเจ้าของ
+  keyboard event ของตัวเอง
+- **การแตะหรือการลากเทอร์มินัลตามปกติจะไม่ blur เพียงเพราะ IME ถูกซ่อน** — touch
+  interaction ยังคง terminal focus ใน physical mode; เฉพาะ selection mode เท่านั้นที่
+  suspend focus เพื่อรองรับการเลือกข้อความ
 - **การลากต้องตั้ง `buttons: 1` บน `mousemove` ด้วย ไม่ใช่แค่ `mousedown`** — xterm
   แยก "ลากทั้งที่กดปุ่มอยู่" ออกจาก "เลื่อนเมาส์เฉยๆ" ด้วยฟิลด์นี้ล้วนๆ และ listener
   ของการลากอยู่ที่ `document` ไม่ใช่ที่ `term.element`

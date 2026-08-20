@@ -4,7 +4,7 @@
  * แยกไฟล์เพราะเรื่องนี้ทำพังมาแล้วสามรอบ และทุกรอบมาจากสมมติฐานเดียวกัน:
  * **focus ไม่ใช่ตัวชี้วัดว่าคีย์บอร์ดเปิดอยู่** ตอนผู้ใช้ปิดคีย์บอร์ดด้วยปุ่มของ
  * Android เอง ระบบซ่อนคีย์บอร์ดแต่ textarea ยังโฟกัสอยู่ ตัวชี้วัดที่ถูกคือพื้นที่
- * ที่หายไปของ visualViewport
+ * ที่หายไปของ visualViewport การตรวจนี้ไม่ตัดสินว่าต้องปล่อย terminal focus หรือไม่
  */
 export interface ViewportSample {
   /** ความสูงของ layout viewport (window.innerHeight) */
@@ -21,67 +21,10 @@ export interface ViewportSample {
   thresholdPx?: number;
 }
 
-export const PHYSICAL_KEY_RESIZE_WINDOW_MS = 1000;
-
-export interface PhysicalKeyboardFocusGuard {
-  noteInput(): void;
-  shouldRelease(prevVisible: boolean, nextVisible: boolean, focused: boolean): boolean;
-  reset(): void;
-}
-
-export function createPhysicalKeyboardFocusGuard(options: {
-  now: () => number;
-  windowMs?: number;
-}): PhysicalKeyboardFocusGuard {
-  const windowMs = options.windowMs ?? PHYSICAL_KEY_RESIZE_WINDOW_MS;
-  let terminalInputAt: number | null = null;
-
-  return {
-    noteInput() { terminalInputAt = options.now(); },
-    shouldRelease(prevVisible, nextVisible, focused) {
-      if (!focused || (!prevVisible && nextVisible)) terminalInputAt = null;
-
-      let recentPhysicalInput = false;
-      if (prevVisible && !nextVisible && terminalInputAt !== null) {
-        const age = options.now() - terminalInputAt;
-        recentPhysicalInput = age >= 0 && age <= windowMs;
-        terminalInputAt = null;
-      }
-
-      return shouldReleaseFocus(
-        prevVisible, nextVisible, focused, recentPhysicalInput,
-      );
-    },
-    reset() { terminalInputAt = null; },
-  };
-}
-
 export function isKeyboardVisible(s: ViewportSample): boolean {
   // เครื่องที่ไม่มี touch ไม่มีคีย์บอร์ดบนจอให้ซ่อน — viewport ไม่มีวันหด
   // ที่นั่น focus คือคำตอบที่ถูก ไม่งั้นปุ่ม ⌨ จะกดปิดไม่ได้เลยบน desktop
   if (s.visualHeight === undefined || !s.hasTouch) return s.focused;
   const inset = s.innerHeight - s.visualHeight - (s.visualOffsetTop ?? 0);
   return inset > (s.thresholdPx ?? 120);
-}
-
-/**
- * ต้องปล่อย focus ทิ้งไหม หลัง viewport เปลี่ยน
- *
- * **นี่คือจุดที่แก้อาการ "ปิดคีย์บอร์ดด้วยปุ่มของ OS แล้วมันเด้งกลับมาตอนปัดจอ"**
- *
- * ตอนผู้ใช้กดปุ่มซ่อนคีย์บอร์ดของ Android ระบบซ่อนคีย์บอร์ดให้จริง แต่ **ไม่ blur
- * textarea ให้** สถานะที่ได้คือ "คีย์บอร์ดหายแล้วแต่ยังโฟกัสอยู่" ซึ่งแปลว่า
- * IME ยังต่ออยู่กับช่องกรอกนั้น พอผู้ใช้แตะหรือปัดอะไรก็ตามบนหน้านั้นอีกครั้ง
- * Chrome ถือว่ากำลังยุ่งกับช่องที่โฟกัสอยู่ จึงเรียกคีย์บอร์ดกลับขึ้นมาเอง
- * (วัดแล้วว่าไม่มีใครในโค้ดเราหรือใน xterm เรียก focus() ระหว่างปัดจอเลย —
- * มันแค่ไม่เคยเสีย focus ตั้งแต่แรก)
- *
- * ทางแก้คือทำให้ "คีย์บอร์ดถูกซ่อน" แปลว่า "ไม่โฟกัส" เสมอ แล้วจะไม่มี IME
- * ค้างไว้ให้ระบบเรียกกลับมาได้อีก
- */
-export function shouldReleaseFocus(
-  prevVisible: boolean, nextVisible: boolean, focused: boolean,
-  recentPhysicalInput = false,
-): boolean {
-  return prevVisible && !nextVisible && focused && !recentPhysicalInput;
 }

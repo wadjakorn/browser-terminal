@@ -1,7 +1,7 @@
 [Unit]
 Description=browser-console — web terminal over Tailscale
-After=network-online.target
-Wants=network-online.target
+After=network-online.target herdr-server.service
+Wants=network-online.target herdr-server.service
 StartLimitIntervalSec=60
 StartLimitBurst=3
 
@@ -11,6 +11,11 @@ WorkingDirectory=%h/development/browser-console
 ExecStart=/usr/bin/env node --env-file=%h/development/browser-console/.env %h/development/browser-console/dist/server/index.js
 Restart=on-failure
 RestartSec=3
+# ชั่วคราว: herdr server ที่รันอยู่ยังติดอยู่ใน cgroup ของ unit นี้ (client ตัวแรก
+# spawn มันด้วย setsid ซึ่งไม่หลุด cgroup) ค่า default control-group จะฆ่ามันและ
+# pane ทั้งหมดทุกครั้งที่ restart ถอดบรรทัดนี้ออกเมื่อ herdr server มาจาก
+# herdr-server.service แล้ว — ดู README หัวข้อ Deployment
+KillMode=process
 
 [Install]
 WantedBy=default.target

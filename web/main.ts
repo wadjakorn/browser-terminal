@@ -5,10 +5,13 @@ import { createInputPipeline } from './input-pipeline.js';
 import { mountKeybar, type MountedKeybar } from './keybar.js';
 import { watchViewport } from './viewport.js';
 import { createGestureRecognizer } from './touch-gestures.js';
+import { isKeyboardVisible } from './keyboard-visibility.js';
 import {
-  createPhysicalKeyboardFocusGuard,
-  isKeyboardVisible,
-} from './keyboard-visibility.js';
+  applyTerminalFocusEffect,
+  initialTerminalFocusState,
+  transitionTerminalFocus,
+  type TerminalFocusEvent,
+} from './keyboard-focus-mode.js';
 import { fitAndSendResize } from './terminal-resize.js';
 import { createTextSelection, selectionMouseInit, type TerminalPort } from './text-selection.js';
 import { createSelectionSheet } from './selection-sheet.js';
@@ -103,6 +106,28 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   t.loadAddon(fit);
   t.open($('terminal'));
 
+  let terminalFocusState = initialTerminalFocusState();
+  const terminalFocusPort = {
+    textarea: t.textarea,
+    focus: () => t.focus(),
+    blur: () => t.blur(),
+    canFocus: () => {
+      const active = document.activeElement;
+      if (!active || active === document.body || active === t.textarea) return true;
+      const ownsTextInput = active instanceof HTMLInputElement
+        || active instanceof HTMLTextAreaElement
+        || active instanceof HTMLSelectElement
+        || (active instanceof HTMLElement && active.isContentEditable);
+      const visible = active instanceof HTMLElement && active.getClientRects().length > 0;
+      return !(ownsTextInput && visible);
+    },
+  };
+  const dispatchTerminalFocus = (event: TerminalFocusEvent): void => {
+    const transition = transitionTerminalFocus(terminalFocusState, event);
+    terminalFocusState = transition.state;
+    applyTerminalFocusEffect(terminalFocusPort, transition.effect);
+  };
+
   const pipeline = createInputPipeline({
     send: bytes => { if (ws?.readyState === WebSocket.OPEN) ws.send(bytes); },
     getModes: () => t.modes,
@@ -116,9 +141,23 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     },
     actionState: action => action === 'select-mode' && (selection?.active() ?? false),
     modifierState: () => pipeline.modifierState(),
-    onToggleKeyboard: () => toggleKeyboard(t),
-    onOpenKeyboard: () => openKeyboard(t),
-    onRequestKeyboardClose: () => t.blur(),
+    onToggleKeyboard: () => {
+      if (keyboardVisible()) dispatchTerminalFocus('request-ime-close');
+      else {
+        leaveSelectionForKeyboard();
+        dispatchTerminalFocus('request-ime-open');
+      }
+      syncKeyboardButton();
+    },
+    onOpenKeyboard: () => {
+      leaveSelectionForKeyboard();
+      dispatchTerminalFocus('request-ime-open');
+      syncKeyboardButton();
+    },
+    onRequestKeyboardClose: () => {
+      dispatchTerminalFocus('request-ime-close');
+      syncKeyboardButton();
+    },
     onToggleFullscreen: () => {
       void fullscreen.toggle().then(result => {
         if (result === 'rejected') {
@@ -162,10 +201,6 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     );
   };
 
-  const physicalKeyboardFocus = createPhysicalKeyboardFocusGuard({
-    now: () => performance.now(),
-  });
-
   /**
    * ยามกันคีย์บอร์ดเด้งระหว่างโหมดเลือก
    *
@@ -188,32 +223,26 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     if (selection?.active()) t.blur();
   });
 
-  // sync สถานะปุ่มจากทุกทางที่สถานะเปลี่ยนได้โดยไม่ผ่าน toggleKeyboard ของเรา
+  // sync สถานะปุ่มจากทุกทางที่สถานะเปลี่ยนได้โดยไม่ผ่าน dispatcher ของเรา
   t.textarea?.addEventListener('focus', syncKeyboardButton);
   t.textarea?.addEventListener('blur', syncKeyboardButton);
-  // ทุกทางที่แอป เบราว์เซอร์ หรือ xterm ทำ focus หลุดจะมารวมที่ DOM event นี้
-  t.textarea?.addEventListener('blur', () => physicalKeyboardFocus.reset());
 
-  // ผู้ใช้ปิดคีย์บอร์ดด้วยปุ่มของ OS = viewport ขยายกลับ แต่ textarea ยังโฟกัสอยู่
-  // ต้องปล่อย focus ทิ้งเองตรงนี้ ไม่งั้นการแตะหรือปัดจอครั้งถัดไปจะทำให้ Android
-  // เรียกคีย์บอร์ดกลับขึ้นมา ทั้งที่ผู้ใช้เพิ่งสั่งปิดไป — ดู shouldReleaseFocus()
+  // ผู้ใช้ปิดคีย์บอร์ดด้วยปุ่มของ OS = viewport ขยายกลับ แต่คง terminal focus ไว้
+  // ใน physical mode เพื่อให้คีย์บอร์ด Bluetooth พิมพ์ต่อได้โดยไม่เรียก IME กลับมา
   const vv = window.visualViewport;
   if (vv) {
     let prevVisible = keyboardVisible();
     vv.addEventListener('resize', () => {
       const nextVisible = keyboardVisible();
-      if (physicalKeyboardFocus.shouldRelease(
-        prevVisible, nextVisible, terminalFocused(),
-      )) t.blur();
+      if (prevVisible && !nextVisible) {
+        dispatchTerminalFocus('native-ime-hidden');
+      }
       prevVisible = nextVisible;
       syncKeyboardButton();
     });
   }
 
   t.onData(data => {
-    // onData คือหลักฐานที่เชื่อถือได้ว่า xterm รับ input แล้ว ไม่ว่า Android จะส่ง
-    // keydown, keypress หรือ input event และ viewport หดก่อน/หลัง event นั้น
-    physicalKeyboardFocus.noteInput();
     pipeline.onTerminalData(data);
     keybar.refresh();
   });
@@ -242,7 +271,9 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
         stopGestures?.();
         // Ctrl ที่ค้างอยู่จะไปยิงใส่ปุ่มถัดไปที่ไม่เกี่ยวกันเลยหลังออกจากโหมด
         pipeline.clearModifiers();
-        t.blur();
+        dispatchTerminalFocus('selection-entered');
+      } else {
+        dispatchTerminalFocus('selection-exited');
       }
       keybar.refresh();
     },
@@ -250,6 +281,8 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   });
 
   bindTouch(t, fit);
+  dispatchTerminalFocus('session-ready');
+  syncKeyboardButton();
 
   return { term: t, fit, keybar };
 }
@@ -280,15 +313,6 @@ function keyboardVisible(): boolean {
   });
 }
 
-function toggleKeyboard(t: Terminal): void {
-  if (keyboardVisible()) {
-    t.blur();
-    syncKeyboardButton();
-  } else {
-    openKeyboard(t);
-  }
-}
-
 /**
  * โหมดเลือกกับคีย์บอร์ดบนจออยู่ด้วยกันไม่ได้
  *
@@ -298,16 +322,6 @@ function toggleKeyboard(t: Terminal): void {
  */
 function leaveSelectionForKeyboard(): void {
   if (selection?.active()) selection.cancel();
-}
-
-function openKeyboard(t: Terminal): void {
-  leaveSelectionForKeyboard();
-  // blur ก่อน focus เสมอ — กรณี "โฟกัสอยู่แต่คีย์บอร์ดถูกซ่อน" การ focus ซ้ำ
-  // เฉยๆ ไม่ทำให้ Android เรียกคีย์บอร์ดกลับมา ต้องให้เสีย focus ก่อน
-  // และต้องทำทั้งคู่ใน click gesture เดิมเพื่อให้ mobile browser ยอมเปิด IME
-  t.blur();
-  t.focus();
-  syncKeyboardButton();
 }
 
 /** ให้ปุ่ม ⌨ สว่างตอนคีย์บอร์ดเปิด — ไม่งั้นผู้ใช้ไม่มีทางรู้ว่าสถานะไหน */
@@ -614,8 +628,8 @@ async function connect(): Promise<void> {
     showStatus(null);
     term!.reset();          // PTY ใหม่คือ process ใหม่ ไม่รู้ว่าจออยู่ในสภาพไหน
     resetInputModifiers();
-    // ไม่ focus ตอนต่อติด — บนมือถือ focus = คีย์บอร์ดเด้งขึ้นมากินครึ่งจอทันที
-    // ทั้งที่สิ่งแรกที่ผู้ใช้อยากทำคืออ่าน เปิดคีย์บอร์ดเองด้วยปุ่ม ⌨ บนแถบล่าง
+    // การ reconnect ไม่เปลี่ยน focus mode: คงทั้ง physical/soft/suspended ตามที่ผู้ใช้เลือก
+    // session-ready ของ initTerminal เป็นจุดเดียวที่กำหนดโหมดเริ่มต้น
   };
 
   socket.onmessage = ev => {

@@ -10,9 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-20-physical-keyboard-focus-design.md`
 
-**Execution status (2026-08-20):** Tasks 2 and 3 are implemented. The user explicitly
-authorized proceeding without ADB, so Task 1 and Task 4's target-device checks remain
-pending; automated tests, build verification, and documentation are complete.
+**Execution status (2026-08-20):** The original `onKey` classifier implementation failed
+on the target device. The corrected implementation correlates xterm's accepted `onData`
+input with the following IME retraction, independent of DOM keyboard-event shape and
+current viewport geometry. See “Post-implementation correction” below.
 
 ## Global Constraints
 
@@ -542,6 +543,19 @@ pending; automated tests, build verification, and documentation are complete.
   ```
 
 ## Scrutinize Review History
+
+## Post-implementation correction
+
+Target-device feedback showed the first Bluetooth key reached the terminal and then the
+IME retracted and focus was lost. That disproved the plan's assumption that a qualifying
+`onKey` event would always arm the guard while `keyboardVisible()` was still true.
+
+The implementation now arms the one-shot guard from `t.onData`, immediately before the
+existing input pipeline call. `onData` is the only reliable proof needed: xterm accepted
+the input, whether Android delivered it through `keydown`, `keypress`, or `input`, and
+whether the viewport animation started before or after that browser event. The guard
+still expires after 1,000 ms, is consumed by one visible→hidden transition, and resets
+on blur. No second terminal-byte path was added.
 
 ### Iteration 1
 

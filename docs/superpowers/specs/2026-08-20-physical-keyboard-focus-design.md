@@ -70,30 +70,24 @@ Proceed with the design below only if trace 1 shows a usable physical-key marker
 the visible-to-hidden resize and trace 2 does not. If the blur comes from a different
 listener or xterm itself, stop and revise this design from that evidence.
 
-### 2. Classify usable physical keyboard events
+### 2. Observe accepted terminal input
 
-Add a small pure classifier in `web/keyboard-visibility.ts`. A keyboard event is a
-physical-input signal only when all of these are true:
+The first implementation tried to classify physical input from xterm's `onKey` DOM
+event. Real-device feedback disproved that assumption: the first Bluetooth key reached
+the terminal, but the marker was not armed before the IME retraction blurred the
+textarea. xterm may accept browser input through `keydown`, `keypress`, or `input`, and
+viewport geometry may already report the IME hidden by the time those callbacks run.
 
-- `type === 'keydown'`
-- `isComposing === false`
-- `key !== 'Unidentified'`
-- `keyCode !== 229`
-- `code !== ''`
-
-The `code` requirement is important: hardware keys normally expose a physical key
-position such as `KeyA`, `ArrowLeft`, or `NumpadEnter`, while Android IME compatibility
-events commonly use an empty code or composition key code 229. The target-device trace
-is the gate for relying on this distinction.
+Use xterm's `onData` event instead. It is the reliable application boundary proving that
+xterm accepted input, regardless of which browser event produced it. This listener is
+observational only; bytes still pass through `web/input-pipeline.ts` exactly once.
 
 ### 3. Preserve focus for the associated viewport transition
 
-When xterm's public synchronous `onKey` event reports a classified physical `keydown`
-**while the IME is visible**, record its monotonic timestamp. Keys received while the
-IME is already hidden cannot cause an IME-retraction transition and must not arm the
-guard. The target-device trace must verify that `onKey` fires before the relevant
-viewport resize. When a visible-to-hidden viewport transition arrives, suppress `t.blur()`
-only if a classified event was observed in the immediately preceding 1,000 ms. Consume
+When xterm's `onData` event reports accepted input, record its monotonic timestamp
+without consulting the current viewport geometry. When a visible-to-hidden viewport
+transition arrives, suppress `t.blur()` only if accepted input was observed in the
+immediately preceding 1,000 ms. Consume
 that marker after evaluating the transition so it cannot mask a later, unrelated IME
 dismissal.
 
@@ -101,7 +95,7 @@ Keep the existing release rule unchanged when there is no recent physical marker
 Actual textarea blur and an IME hidden-to-visible transition must clear the marker;
 those paths already cover app keyboard toggles and selection mode without adding reset
 calls to every `t.blur()` site. Encapsulate the marker in a small pure controller so
-tests exercise complete keydown → viewport transition sequences rather than only
+tests exercise complete accepted-input → viewport transition sequences rather than only
 disconnected predicates.
 
 The 1,000 ms window is not a keyboard mode timeout; it only correlates one key event
@@ -110,9 +104,8 @@ mobile viewport animation and short enough not to affect a later user action.
 
 ### 4. Verification
 
-Unit tests cover classification and focus-release decisions without synthesizing
-terminal bytes. Target-device checks cover the browser/OS behavior that Vitest cannot
-model:
+Unit tests cover accepted-input correlation and focus-release decisions. Target-device
+checks cover the browser/OS behavior that Vitest cannot model:
 
 - Bluetooth keyboard input continues for at least 30 mixed keys after the IME retracts.
 - Android's hide-keyboard control still leaves the textarea unfocused.
@@ -123,7 +116,7 @@ model:
 
 ## Files
 
-- `web/keyboard-visibility.ts`: physical-event classifier and focus-release decision.
+- `web/keyboard-visibility.ts`: accepted-input correlation and focus-release decision.
 - `web/keyboard-visibility.test.ts`: regression matrix for both IME dismissal paths.
 - `web/main.ts`: capture physical key timing and pass it into the pure decision.
 - `README.md`: document physical keyboard focus behavior and the viewport distinction.

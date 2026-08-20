@@ -2,9 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createPhysicalKeyboardFocusGuard,
   isKeyboardVisible,
-  isPhysicalKeyboardEvent,
   shouldReleaseFocus,
-  type PhysicalKeySample,
   type ViewportSample,
 } from './keyboard-visibility.js';
 
@@ -87,37 +85,7 @@ describe('shouldReleaseFocus — ปล่อย focus เมื่อ OS ซ่
   });
 });
 
-describe('จำแนก event จาก physical keyboard', () => {
-  const key = (over: Partial<PhysicalKeySample> = {}): PhysicalKeySample => ({
-    type: 'keydown', key: 'a', code: 'KeyA', keyCode: 65,
-    isComposing: false, ...over,
-  });
-
-  it.each([
-    ['ตัวอักษร', key()],
-    ['ลูกศร', key({ key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })],
-    ['control chord', key({ key: 'c', code: 'KeyC', keyCode: 67 })],
-    ['numpad', key({ key: 'Enter', code: 'NumpadEnter', keyCode: 13 })],
-  ])('รับ keydown จาก %s', (_name, sample) => {
-    expect(isPhysicalKeyboardEvent(sample)).toBe(true);
-  });
-
-  it.each([
-    ['keyup', key({ type: 'keyup' })],
-    ['composition', key({ isComposing: true })],
-    ['Android IME key code', key({ keyCode: 229 })],
-    ['unidentified key', key({ key: 'Unidentified' })],
-    ['ไม่มี physical code', key({ code: '' })],
-  ])('ปฏิเสธ %s', (_name, sample) => {
-    expect(isPhysicalKeyboardEvent(sample)).toBe(false);
-  });
-});
-
 describe('ลำดับ event ของ physical keyboard focus guard', () => {
-  const physicalA: PhysicalKeySample = {
-    type: 'keydown', key: 'a', code: 'KeyA', keyCode: 65, isComposing: false,
-  };
-
   function build() {
     let now = 1000;
     return {
@@ -128,38 +96,38 @@ describe('ลำดับ event ของ physical keyboard focus guard', () => 
 
   it('คง focus เมื่อ IME หดทันทีหลัง physical key', () => {
     const { guard } = build();
-    guard.noteKey(physicalA, true);
+    guard.noteInput();
     expect(guard.shouldRelease(true, false, true)).toBe(false);
   });
 
-  it('ไม่ arm จาก physical key ที่เกิดตอน IME ซ่อนอยู่แล้ว', () => {
+  it('คง focus เมื่อ key ถึง terminal หลัง viewport รายงานว่า IME ซ่อนแล้ว', () => {
     const { guard } = build();
-    guard.noteKey(physicalA, false);
-    expect(guard.shouldRelease(true, false, true)).toBe(true);
+    guard.noteInput();
+    expect(guard.shouldRelease(true, false, true)).toBe(false);
   });
 
   it('หมดอายุ correlation หลัง viewport animation window', () => {
     const { guard, advance } = build();
-    guard.noteKey(physicalA, true);
+    guard.noteInput();
     advance(1001);
     expect(guard.shouldRelease(true, false, true)).toBe(true);
   });
 
   it('ใช้ marker ได้ครั้งเดียวจึงไม่บัง dismissal ครั้งต่อไป', () => {
     const { guard } = build();
-    guard.noteKey(physicalA, true);
+    guard.noteInput();
     expect(guard.shouldRelease(true, false, true)).toBe(false);
     expect(guard.shouldRelease(true, false, true)).toBe(true);
   });
 
   it('reset และ focus loss ล้าง marker ที่ค้างอยู่', () => {
     const first = build().guard;
-    first.noteKey(physicalA, true);
+    first.noteInput();
     first.reset();
     expect(first.shouldRelease(true, false, true)).toBe(true);
 
     const second = build().guard;
-    second.noteKey(physicalA, true);
+    second.noteInput();
     expect(second.shouldRelease(true, true, false)).toBe(false);
     expect(second.shouldRelease(true, false, true)).toBe(true);
   });

@@ -21,26 +21,10 @@ export interface ViewportSample {
   thresholdPx?: number;
 }
 
-export interface PhysicalKeySample {
-  type: string;
-  key: string;
-  code: string;
-  keyCode: number;
-  isComposing: boolean;
-}
-
-export function isPhysicalKeyboardEvent(sample: PhysicalKeySample): boolean {
-  return sample.type === 'keydown'
-    && !sample.isComposing
-    && sample.key !== 'Unidentified'
-    && sample.keyCode !== 229
-    && sample.code !== '';
-}
-
 export const PHYSICAL_KEY_RESIZE_WINDOW_MS = 1000;
 
 export interface PhysicalKeyboardFocusGuard {
-  noteKey(sample: PhysicalKeySample, keyboardVisible: boolean): void;
+  noteInput(): void;
   shouldRelease(prevVisible: boolean, nextVisible: boolean, focused: boolean): boolean;
   reset(): void;
 }
@@ -50,29 +34,25 @@ export function createPhysicalKeyboardFocusGuard(options: {
   windowMs?: number;
 }): PhysicalKeyboardFocusGuard {
   const windowMs = options.windowMs ?? PHYSICAL_KEY_RESIZE_WINDOW_MS;
-  let physicalInputAt: number | null = null;
+  let terminalInputAt: number | null = null;
 
   return {
-    noteKey(sample, keyboardVisible) {
-      if (keyboardVisible && isPhysicalKeyboardEvent(sample)) {
-        physicalInputAt = options.now();
-      }
-    },
+    noteInput() { terminalInputAt = options.now(); },
     shouldRelease(prevVisible, nextVisible, focused) {
-      if (!focused || (!prevVisible && nextVisible)) physicalInputAt = null;
+      if (!focused || (!prevVisible && nextVisible)) terminalInputAt = null;
 
       let recentPhysicalInput = false;
-      if (prevVisible && !nextVisible && physicalInputAt !== null) {
-        const age = options.now() - physicalInputAt;
+      if (prevVisible && !nextVisible && terminalInputAt !== null) {
+        const age = options.now() - terminalInputAt;
         recentPhysicalInput = age >= 0 && age <= windowMs;
-        physicalInputAt = null;
+        terminalInputAt = null;
       }
 
       return shouldReleaseFocus(
         prevVisible, nextVisible, focused, recentPhysicalInput,
       );
     },
-    reset() { physicalInputAt = null; },
+    reset() { terminalInputAt = null; },
   };
 }
 

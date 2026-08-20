@@ -166,10 +166,6 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     now: () => performance.now(),
   });
 
-  t.onKey(({ domEvent }) => {
-    physicalKeyboardFocus.noteKey(domEvent, keyboardVisible());
-  });
-
   /**
    * ยามกันคีย์บอร์ดเด้งระหว่างโหมดเลือก
    *
@@ -215,6 +211,9 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   }
 
   t.onData(data => {
+    // onData คือหลักฐานที่เชื่อถือได้ว่า xterm รับ input แล้ว ไม่ว่า Android จะส่ง
+    // keydown, keypress หรือ input event และ viewport หดก่อน/หลัง event นั้น
+    physicalKeyboardFocus.noteInput();
     pipeline.onTerminalData(data);
     keybar.refresh();
   });

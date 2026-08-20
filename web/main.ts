@@ -1,5 +1,6 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { createInputPipeline } from './input-pipeline.js';
 import { mountKeybar, type MountedKeybar } from './keybar.js';
@@ -11,6 +12,7 @@ import { createTextSelection, selectionMouseInit, type TerminalPort } from './te
 import { createSelectionSheet } from './selection-sheet.js';
 import { createClipboard } from './clipboard.js';
 import { loadSelectionPrefs } from './selection-prefs.js';
+import { createLinkOpener, type LinkOpener } from './links.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -73,6 +75,9 @@ function backToLogin(): void {
   showStatus(null);
 }
 
+/** ตั้งค่าใน initTerminal และใช้ต่อใน bindTouch ซึ่งถูกเรียกหลังจากนั้น */
+let linkOpener: LinkOpener | null = null;
+
 function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar } {
   const t = new Terminal({
     fontFamily: 'ui-monospace, monospace',
@@ -92,6 +97,21 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   const fit = new FitAddon();
   t.loadAddon(fit);
   t.open($('terminal'));
+
+  // WebLinksAddon ทำหน้าที่หา URL ในบัฟเฟอร์ให้ (รวม URL ที่ตัดข้ามบรรทัด ซึ่งเป็น
+  // เคสปกติของเพนแคบๆ ใน herdr) เราใช้แค่ hover/leave ของมันเป็นตัวบอกว่าตรงไหน
+  // เป็นลิงก์ ส่วนการเปิดจริงเราทำเองใน links.ts — ดูเหตุผลในหัวไฟล์นั้น
+  linkOpener = createLinkOpener({
+    open: url => { window.open(url, '_blank', 'noopener,noreferrer'); },
+  });
+  //
+  // activate เป็น no-op โดยตั้งใจ: เรากลืน mousedown ก่อนถึง linkifier เสมอเมื่อมี
+  // ลิงก์อยู่ใต้เคอร์เซอร์ (ดู bindTouch) ทางนี้จึงไม่ควรถูกเรียก และถ้าถูกเรียก
+  // การเปิดซ้ำจะกลายเป็นสองแท็บ
+  t.loadAddon(new WebLinksAddon(() => {}, {
+    hover: (_event, uri) => linkOpener?.onHover(uri),
+    leave: () => linkOpener?.onLeave(),
+  }));
 
   const pipeline = createInputPipeline({
     send: bytes => { if (ws?.readyState === WebSocket.OPEN) ws.send(bytes); },
@@ -340,6 +360,18 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     clientX: x, clientY: y, bubbles: true, cancelable: true, view: window, ...extra,
   });
 
+  /**
+   * linkifier ของ xterm ผูก mousemove ไว้กับ `.xterm-screen` ไม่ใช่ `t.element`
+   * ยิง mousemove ใส่ element แม่จึงไม่มีทางถึงมัน เพราะอีเวนต์ bubble ขึ้นเท่านั้น
+   * (ยืนยันในบราวเซอร์จริง: ยิงใส่ `.xterm` ไม่เกิด hover เลย ยิงใส่ `.xterm-screen`
+   * ได้ URL เต็มกลับมาแม้ URL จะถูกตัดข้ามบรรทัด)
+   *
+   * ส่วน mousedown/mouseup ของการแตะยังยิงใส่ `target` ตามเดิม เพราะนั่นคือทางที่
+   * ทำให้ herdr ได้ mouse report — คนละ element คนละหน้าที่ อย่ารวบเป็นตัวเดียว
+   */
+  const linkProbeTarget = (): HTMLElement =>
+    (target.querySelector('.xterm-screen') as HTMLElement | null) ?? target;
+
   /** ความสูงหนึ่งบรรทัดจริงบนจอ — เปลี่ยนตาม pinch zoom จึงต้องวัดสดทุกครั้ง */
   const cellHeight = (): number => {
     const row = el.querySelector('.xterm-rows > div');
@@ -363,15 +395,26 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
           return;
 
         case 'tap': {
-          // แตะ = คลิกซ้ายให้ TUI (เลือก pane ใน herdr)
+          // แตะ = คลิกซ้ายให้ TUI (เลือก pane ใน herdr) เว้นแต่แตะโดนลิงก์
           //
           // xterm โฟกัส textarea ของตัวเองใน handler ของ mousedown ซึ่งบน Android
           // แปลว่าคีย์บอร์ดเด้งขึ้นมาทุกครั้งที่แตะ — ขัดกับที่ตกลงกันไว้ว่าแตะ =
           // คลิกอย่างเดียว จึงต้องคืนสถานะ focus กลับเป็นเหมือนก่อนแตะ
           const wasVisible = keyboardVisible();
-          target.dispatchEvent(new MouseEvent('mousedown', mouseInit(g.x, g.y, { button: 0, buttons: 1 })));
-          target.dispatchEvent(new MouseEvent('mouseup', mouseInit(g.x, g.y, { button: 0, buttons: 0 })));
-          if (!wasVisible) t.blur();
+
+          // mousemove สังเคราะห์คือตัว "ถาม" ว่าตรงนี้มีลิงก์ไหม — linkifier ของ
+          // xterm ตั้ง _currentLink ใน handler ของ mousemove เท่านั้น ถ้าไม่ยิงนำ
+          // ลิงก์จะไม่มีวันถูกพบด้วยการแตะ เพราะ touchstart ถูก preventDefault ไว้
+          // แล้วบราวเซอร์ไม่สังเคราะห์ mouse event ให้เลย
+          const opened = linkOpener?.handleTap(
+            () => linkProbeTarget().dispatchEvent(new MouseEvent('mousemove', mouseInit(g.x, g.y, { buttons: 0 }))),
+            () => {
+              target.dispatchEvent(new MouseEvent('mousedown', mouseInit(g.x, g.y, { button: 0, buttons: 1 })));
+              target.dispatchEvent(new MouseEvent('mouseup', mouseInit(g.x, g.y, { button: 0, buttons: 0 })));
+            },
+          ) ?? false;
+
+          if (!wasVisible || opened) t.blur();
           return;
         }
 
@@ -443,6 +486,15 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     (selection?.active() ?? false) && e.touches.length < 2 && e.changedTouches.length > 0;
 
   const firstTouch = (e: TouchEvent): Touch => e.changedTouches[0]!;
+
+  // เมาส์จริง: xterm ส่ง mouse report ให้ herdr ใน handler ของ mousedown ของมันเอง
+  // ดักในเฟส capture เพื่อกลืนอีเวนต์ก่อนถึง xterm เมื่อมีลิงก์อยู่ใต้เคอร์เซอร์
+  // ให้พฤติกรรมตรงกับการแตะ: คลิกลิงก์ = เปิดลิงก์อย่างเดียว ไม่สลับ pane
+  target.addEventListener('mousedown', e => {
+    if (!linkOpener?.handleMouseDown()) return;
+    e.preventDefault();
+    e.stopPropagation();
+  }, { capture: true });
 
   el.addEventListener('touchstart', e => {
     e.preventDefault();          // กันเบราว์เซอร์สังเคราะห์ mouse/โฟกัส/ซูมหน้าเว็บเอง

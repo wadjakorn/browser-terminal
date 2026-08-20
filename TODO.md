@@ -19,21 +19,6 @@
 
 ## ความปลอดภัย — ควรทำก่อนเปิด repo เป็น public
 
-### `/api/login` ไม่เช็ค origin
-
-`originAllowed()` (`server/index.ts:63`) ถูกใช้ที่ WebSocket upgrade อย่างเดียว
-(บรรทัด 137) **ทดสอบแล้วว่ายิง `POST /api/login` ข้าม origin ด้วยรหัสที่ถูกได้ 200 จริง**
-
-ผลกระทบจำกัดเพราะ cookie เป็น `SameSite=Strict` และอ่าน response ข้าม origin ไม่ได้
-ผู้โจมตีจึงขโมย session ไม่ได้และไม่รู้ด้วยซ้ำว่าเดารหัสถูกไหม แต่เว็บร้ายที่ผู้ใช้
-เผลอเปิดจะ **ยิงเข้า server ที่อยู่หลัง loopback หรือ tailnet ซึ่งตัวมันเองเข้าไม่ถึงได้**
-และเผา rate limit ของเจ้าของเครื่องทิ้งจนล็อกอินเองไม่ได้
-
-แก้: เรียก `originAllowed()` ใน handler ของ login ด้วย ตอบ 403 เมื่อไม่ผ่าน
-**แต่ต้องยอมให้ไม่มี header `Origin` เลย** ไม่งั้น curl และ client ที่ไม่ใช่เบราว์เซอร์
-จะล็อกอินไม่ได้ (ตอนนี้ `originAllowed` คืน false เมื่อ origin เป็น undefined
-ซึ่งถูกสำหรับ WebSocket แต่ผิดสำหรับ login)
-
 ### ไม่มี security header สักตัว
 
 ตอบกลับมาแค่ `content-type` — ไม่มี `X-Content-Type-Options: nosniff`,

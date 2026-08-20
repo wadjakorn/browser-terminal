@@ -63,6 +63,25 @@ export function createServer(cfg: Config) {
   const originAllowed = (origin: string | undefined): boolean =>
     !!origin && cfg.allowedOrigins.includes(origin);
 
+  /**
+   * เกณฑ์ origin ของ `/api/login` ต่างจากของ WebSocket โดยตั้งใจ
+   *
+   * WebSocket ใช้ `originAllowed()` ตรง ๆ ได้เพราะเบราว์เซอร์ส่ง `Origin` มาเสมอ
+   * ในการ upgrade — ไม่มี header แปลว่าไม่ใช่เบราว์เซอร์ ปฏิเสธได้เลย
+   *
+   * แต่ `/api/login` เป็น HTTP ธรรมดาที่ curl และ client ที่ไม่ใช่เบราว์เซอร์
+   * ต้องใช้ได้ และพวกนั้นไม่ส่ง `Origin` การ reuse `originAllowed()` ตรงนี้
+   * จะทำให้ล็อกอินจากบรรทัดคำสั่งพังทันที
+   *
+   * สิ่งที่กันได้จริงคือ **เบราว์เซอร์** ซึ่งแนบ `Origin` ให้เองและปลอมไม่ได้
+   * จาก JavaScript — ผู้โจมตีที่ไม่ผ่านเบราว์เซอร์แค่ไม่ส่ง header ก็ผ่านด่านนี้
+   * ซึ่งไม่ได้แย่ลงกว่าเดิม เพราะเขายิงพอร์ตตรงได้อยู่แล้ว ด่านนี้มีไว้กัน
+   * "เว็บร้ายที่ผู้ใช้เผลอเปิด" ยิงเข้า server ที่อยู่หลัง loopback หรือ tailnet
+   * ซึ่งตัวเว็บนั้นเองเข้าไม่ถึง
+   */
+  const loginOriginAllowed = (origin: string | undefined): boolean =>
+    origin === undefined || originAllowed(origin);
+
   const sessionValid = (req: IncomingMessage): boolean => {
     const token = parseCookie(req.headers.cookie, COOKIE_NAME);
     return !!token && verifySession(cfg.sessionSecret, token, Date.now(), epochs.current());
@@ -81,6 +100,10 @@ export function createServer(cfg: Config) {
 
   const http = createHttpServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/api/login') {
+      // ต้องมาก่อน limiter ทั้ง isBlocked และ recordFailure — ไม่งั้นเว็บร้ายยิงรัว
+      // ข้าม origin จนถัง rate limit ของ IP เจ้าของเต็ม แล้วเจ้าของล็อกอินเองไม่ได้
+      // (ขโมย session ไม่ได้อยู่แล้วเพราะ SameSite=Strict แต่ล็อกเจ้าของออกได้)
+      if (!loginOriginAllowed(req.headers.origin)) { res.writeHead(403).end('forbidden'); return; }
       const now = Date.now();
       const ip = ipOf(req);
       if (limiter.isBlocked(now, ip)) { res.writeHead(429).end('ลองใหม่ภายหลัง'); return; }

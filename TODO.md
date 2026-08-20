@@ -19,18 +19,6 @@
 
 ## ความปลอดภัย — ควรทำก่อนเปิด repo เป็น public
 
-### ไม่มี security header สักตัว
-
-ตอบกลับมาแค่ `content-type` — ไม่มี `X-Content-Type-Options: nosniff`,
-`X-Frame-Options` / `frame-ancestors`, `Referrer-Policy` หรือ CSP เลย (ตรวจแล้ว)
-
-`SameSite=Strict` กัน clickjacking ที่ต้องใช้ cookie ไปได้เกือบหมด (หน้าที่ถูก frame
-จะเห็นแค่หน้า login) แต่สำหรับโปรเจกต์ที่ขายเรื่องความปลอดภัยเป็นจุดเด่น การไม่มี
-เลยคือสิ่งแรกที่คนอ่านจะทัก
-
-แก้: ใส่ชุด header พื้นฐานตอนเสิร์ฟ static และตั้ง CSP ที่ยอม `'self'` โดยต้องเปิด
-`'unsafe-inline'` ให้ style เพราะ xterm ฉีด style ของตัวเองเข้ามา
-
 ### ชื่อใน LICENSE ยังเป็นของเก่า
 
 `LICENSE` เขียนว่า `browser-console contributors` แต่ repo ชื่อ `browser-terminal`

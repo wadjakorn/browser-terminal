@@ -52,6 +52,38 @@ export function cookieHeader(token: string, maxAgeSec: number, secure: boolean):
   return `${COOKIE_NAME}=${token}; ${flags.join('; ')}`;
 }
 
+/**
+ * หน้าเว็บกับ shell อยู่ origin เดียวกัน — XSS หนึ่งจุดจึงเท่ากับ shell ของเครื่อง
+ * ชุด header นี้ไม่ได้แก้ช่องโหว่ที่มีอยู่ แต่เป็นด่านที่ราคาถูกที่สุดที่จะมี
+ *
+ * `style-src` ต้องยอม `'unsafe-inline'` เพราะ xterm ฉีด `<style>` ของตัวเอง
+ * เข้ามาตอน render (DOM renderer สร้าง rule ของ cell/สีเองทั้งหมด) ถ้าไม่ยอม
+ * เทอร์มินัลจะเพี้ยนทั้งจอโดยไม่มี error ให้เห็น — ส่วน `script-src` ไม่ต้องยอม
+ * เพราะ `web/index.html` ไม่มี inline script เลย และ vite ก็ไม่ได้สร้างขึ้นมา
+ *
+ * `connect-src 'self'` ครอบ WebSocket ไปด้วย: CSP3 ให้ `'self'` แมตช์ `ws:`/`wss:`
+ * ที่ origin เดียวกันกับหน้าที่เป็น `http:`/`https:` จึงไม่ต้องเขียน `ws:` แยก
+ * ซึ่งถ้าเขียนจะกลายเป็นยอมทุกโฮสต์
+ */
+export const SECURITY_HEADERS: Record<string, string> = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  // ซ้ำกับ frame-ancestors โดยตั้งใจ — เบราว์เซอร์เก่าที่ไม่รู้จัก CSP ยังกันได้
+  'x-frame-options': 'DENY',
+  'content-security-policy': [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+  ].join('; '),
+};
+
 export function createServer(cfg: Config) {
   const limiter = createLoginLimiter();
   const epochs = createEpochStore(cfg.epochFile);
@@ -99,6 +131,10 @@ export function createServer(cfg: Config) {
   }
 
   const http = createHttpServer(async (req, res) => {
+    // ตั้งด้วย setHeader ก่อน routing — ค่าที่ writeHead() ส่งทีหลังจะรวมกับของนี้
+    // ไม่ทับทิ้ง ทุก response จึงได้ header ครบโดยไม่ต้องไปแก้ทุกจุดที่ตอบกลับ
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+
     if (req.method === 'POST' && req.url === '/api/login') {
       // ต้องมาก่อน limiter ทั้ง isBlocked และ recordFailure — ไม่งั้นเว็บร้ายยิงรัว
       // ข้าม origin จนถัง rate limit ของ IP เจ้าของเต็ม แล้วเจ้าของล็อกอินเองไม่ได้

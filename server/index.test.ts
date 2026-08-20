@@ -119,6 +119,45 @@ describe('POST /api/login ตรวจ origin', () => {
   });
 });
 
+describe('security header', () => {
+  // เสิร์ฟหน้าเว็บและ API จาก origin เดียวกับที่รัน shell ได้ ทำให้ XSS หนึ่งจุด
+  // = shell ของเครื่อง ชุด header นี้คือด่านที่ราคาถูกที่สุดที่มี
+  const expected: Array<[string, string]> = [
+    ['x-content-type-options', 'nosniff'],
+    ['referrer-policy', 'no-referrer'],
+    ['x-frame-options', 'DENY'],
+  ];
+
+  it('หน้าเว็บมี header ครบ', async () => {
+    const res = await fetch(`${base}/`);
+    for (const [name, value] of expected) expect(res.headers.get(name)).toBe(value);
+  });
+
+  it('CSP ปิดช่องที่อันตรายและยอม inline style ให้ xterm', async () => {
+    const csp = (await fetch(`${base}/`)).headers.get('content-security-policy')!;
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("base-uri 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    // xterm ฉีด <style> ของตัวเองเข้ามาตอน render ถ้าไม่ยอม inline style
+    // เทอร์มินัลจะเพี้ยนทั้งจอโดยไม่มี error ให้เห็น
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    // script ต้องไม่ยอม inline — ไม่มี inline script ในหน้านี้อยู่แล้ว
+    expect(csp).toMatch(/script-src 'self'(;|$)/);
+  });
+
+  it('API ก็ต้องมี nosniff ไม่ใช่แค่ไฟล์ static', async () => {
+    const res = await fetch(`${base}/api/session`);
+    expect(res.status).toBe(401);
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it('ไม่ทับ content-type ของไฟล์ที่เสิร์ฟ', async () => {
+    const res = await fetch(`${base}/`);
+    expect(res.headers.get('content-type')).toContain('text/html');
+  });
+});
+
 describe('GET /api/session', () => {
   it('cookie ถูกต้องได้ 200', async () => {
     const res = await fetch(`${base}/api/session`, { headers: { cookie: goodCookie() } });

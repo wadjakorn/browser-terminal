@@ -271,9 +271,13 @@ recognizer ไม่รวบสองแตะเป็นท่าของต
   proxy — ยืนยันแล้วว่า `tailscale serve` ส่ง `X-Forwarded-For` มาให้จริง
 - **อัปเกรด Node แล้วต้อง `pnpm rebuild`** — `node-pty` เป็น native module
   ถ้าไม่ rebuild service จะพังด้วย `NODE_MODULE_VERSION mismatch` ที่อ่านไม่รู้เรื่อง
-- **`PUBLIC_ORIGIN` ต้องตรงกับที่เปิดในเบราว์เซอร์เป๊ะๆ** ถ้าไม่ตรง WebSocket จะโดน
-  ปฏิเสธ 403 และถ้าใส่ `https` ทั้งที่เสิร์ฟจริงเป็น `http` เบราว์เซอร์จะทิ้ง cookie
-  เงียบๆ อาการคือล็อกอินสำเร็จแล้ววนกลับหน้า login
+- **`PUBLIC_ORIGIN` ต้องตรงกับที่เปิดในเบราว์เซอร์เป๊ะๆ** ถ้าไม่ตรง ทั้ง WebSocket
+  และ `POST /api/login` จะโดนปฏิเสธ 403 และถ้าใส่ `https` ทั้งที่เสิร์ฟจริงเป็น `http`
+  เบราว์เซอร์จะทิ้ง cookie เงียบๆ อาการคือล็อกอินสำเร็จแล้ววนกลับหน้า login
+- **`/api/login` ยอมให้ไม่มี header `Origin` โดยตั้งใจ** — `curl` และ client ที่ไม่ใช่
+  เบราว์เซอร์ไม่ส่ง header นี้ ด่าน origin ของ login จึงกันได้แค่ *เบราว์เซอร์* ซึ่ง
+  แนบ `Origin` ให้เองและ JavaScript ปลอมไม่ได้ เกณฑ์จึงต่างจาก WebSocket ที่ปฏิเสธ
+  เมื่อไม่มี header (เพราะเบราว์เซอร์ส่งมาเสมอตอน upgrade)
 - **`focus` ไม่ใช่ตัวชี้วัดว่าคีย์บอร์ดบนจอเปิดอยู่** — Android ซ่อนคีย์บอร์ดโดยไม่ blur
   ใช้ `keyboard-visibility.ts` ที่วัดจาก `visualViewport` เท่านั้น
 - **physical keyboard ต้องไม่เสีย focus ตอน Android หด IME** — input จาก Bluetooth

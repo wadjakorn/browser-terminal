@@ -72,6 +72,53 @@ describe('POST /api/login', () => {
   });
 });
 
+describe('POST /api/login ตรวจ origin', () => {
+  // เซิร์ฟเวอร์แยกพอร์ต ไม่งั้นเทส rate limit ข้างบนบล็อก 127.0.0.1 ไว้แล้ว
+  // เทสในนี้จะได้ 429 แทนสิ่งที่ตั้งใจวัด
+  const PORT2 = 7346;
+  const base2 = `http://127.0.0.1:${PORT2}`;
+  let srv2: ReturnType<typeof createServer>;
+
+  beforeAll(async () => {
+    srv2 = createServer({ ...cfg, epochFile: join(mkdtempSync(join(tmpdir(), 'bc-test-')), 'epoch') });
+    await srv2.listen(PORT2);
+  });
+  afterAll(async () => { await srv2.close(); });
+
+  const loginFrom = (origin: string | undefined, password: string) =>
+    fetch(`${base2}/api/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) },
+      body: JSON.stringify({ password }),
+    });
+
+  it('origin ที่ไม่อนุญาตได้ 403 และไม่ได้ cookie แม้รหัสถูก', async () => {
+    const res = await loginFrom('https://evil.example', 'hunter2');
+    expect(res.status).toBe(403);
+    expect(res.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('ไม่มี header Origin เลยยังล็อกอินได้ — curl และ client ที่ไม่ใช่เบราว์เซอร์', async () => {
+    // originAllowed() คืน false เมื่อ origin เป็น undefined ซึ่งถูกสำหรับ WebSocket
+    // (เบราว์เซอร์ส่ง Origin ให้เสมอ) แต่ผิดสำหรับ login ที่ต้องรองรับ non-browser
+    const res = await loginFrom(undefined, 'hunter2');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('set-cookie')).toContain('bc_session=');
+  });
+
+  it('ยิงข้าม origin ไม่เผา rate limit ของเจ้าของเครื่อง', async () => {
+    // นี่คือความเสียหายจริงของช่องนี้: เว็บร้ายที่ผู้ใช้เผลอเปิดยิงรัวจนเจ้าของ
+    // ล็อกอินเองไม่ได้ ดังนั้นการเช็ค origin ต้องมา *ก่อน* limiter ทั้ง isBlocked
+    // และ recordFailure
+    for (let i = 0; i < 12; i++) await loginFrom('https://evil.example', 'wrong');
+    expect((await loginFrom(ORIGIN, 'hunter2')).status).toBe(200);
+  });
+
+  it('origin ที่อนุญาตยังทำงานปกติ', async () => {
+    expect((await loginFrom(ORIGIN, 'hunter2')).status).toBe(200);
+  });
+});
+
 describe('GET /api/session', () => {
   it('cookie ถูกต้องได้ 200', async () => {
     const res = await fetch(`${base}/api/session`, { headers: { cookie: goodCookie() } });

@@ -1,6 +1,6 @@
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { extname, join, normalize } from 'node:path';
+import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
+import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { loadConfig, type Config } from './config.js';
@@ -267,8 +267,30 @@ export function createServer(cfg: Config) {
   };
 }
 
+/**
+ * ไฟล์นี้ถูกเรียกเป็น entrypoint หรือถูก import เข้ามา
+ *
+ * เทียบ path เต็ม ไม่ใช่ basename: เดิมใช้ `endsWith(argv[1].split('/').pop())`
+ * ซึ่งไฟล์ชื่อ `index.js` ที่ path ไหนก็ผ่าน ตอนนี้ยังไม่มีผลเพราะมี entrypoint
+ * เดียว แต่พอเพิ่มตัวที่สองจะกลายเป็นรัน server ซ้อนตอน import โดยไม่มีอะไรเตือน
+ *
+ * เทียบ realpath ด้วยเพื่อรองรับกรณีถูกเรียกผ่าน symlink — ถ้าเทียบแต่ path ที่
+ * resolve แล้ว การรันผ่าน symlink จะทำให้ server ไม่สตาร์ทโดยไม่มี error เลย
+ */
+export function isEntrypoint(metaUrl: string, argv1: string | undefined): boolean {
+  if (!argv1) return false;
+  const self = fileURLToPath(metaUrl);
+  const invoked = resolve(argv1);
+  if (self === invoked) return true;
+  try {
+    return realpathSync(self) === realpathSync(invoked);
+  } catch {
+    return false;
+  }
+}
+
 // entrypoint — ไม่รันตอน import จากเทส
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!)) {
+if (isEntrypoint(import.meta.url, process.argv[1])) {
   const cfg = loadConfig(process.env);
   const server = createServer(cfg);
   await server.listen(cfg.port, cfg.host);

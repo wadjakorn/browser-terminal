@@ -112,6 +112,7 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     focus: () => t.focus(),
     blur: () => t.blur(),
     canFocus: () => {
+      if (selection?.active()) return false;
       const active = document.activeElement;
       if (!active || active === document.body || active === t.textarea) return true;
       const ownsTextInput = active instanceof HTMLInputElement

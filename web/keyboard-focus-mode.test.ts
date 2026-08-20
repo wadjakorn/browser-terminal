@@ -42,6 +42,14 @@ describe('applyTerminalFocusEffect', () => {
     expect(calls).toEqual(['mode:text', 'blur', 'focus']);
   });
 
+  it('sets none mode before the explicit close focus cycle', () => {
+    const { calls, port } = buildPort();
+    applyTerminalFocusEffect(port, {
+      type: 'focus', inputMode: 'none', cycle: true,
+    });
+    expect(calls).toEqual(['mode:none', 'blur', 'focus']);
+  });
+
   it('blurs for a blur effect', () => {
     const { calls, port } = buildPort();
     applyTerminalFocusEffect(port, { type: 'blur' });
@@ -101,6 +109,27 @@ describe('terminal focus mode transitions', () => {
     expect(result).toEqual({
       state: { mode: 'physical' },
       effect: { type: 'focus', inputMode: 'none', cycle: false },
+    });
+  });
+
+  it.each(['native-ime-hidden', 'request-ime-close'] as const)(
+    'preserves suspended selection on %s',
+    event => {
+      expect(transitionTerminalFocus({ mode: 'suspended' }, event)).toEqual({
+        state: { mode: 'suspended' },
+        effect: { type: 'none' },
+      });
+    },
+  );
+
+  it('keeps selection suspended when native IME hide arrives after soft mode', () => {
+    let result = transitionTerminalFocus({ mode: 'physical' }, 'request-ime-open');
+    result = transitionTerminalFocus(result.state, 'selection-entered');
+    result = transitionTerminalFocus(result.state, 'native-ime-hidden');
+
+    expect(result).toEqual({
+      state: { mode: 'suspended' },
+      effect: { type: 'none' },
     });
   });
 

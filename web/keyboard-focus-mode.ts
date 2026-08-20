@@ -52,6 +52,11 @@ export function transitionTerminalFocus(
   state: TerminalFocusState,
   event: TerminalFocusEvent,
 ): TerminalFocusTransition {
+  if (state.mode === 'suspended'
+    && (event === 'native-ime-hidden' || event === 'request-ime-close')) {
+    return { state, effect: { type: 'none' } };
+  }
+
   switch (event) {
     case 'session-ready':
     case 'selection-exited':

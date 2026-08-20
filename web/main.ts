@@ -438,10 +438,9 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
         case 'tap': {
           // แตะ = คลิกซ้ายให้ TUI (เลือก pane ใน herdr) เว้นแต่แตะโดนลิงก์
           //
-          // xterm โฟกัส textarea ของตัวเองใน handler ของ mousedown ซึ่งบน Android
-          // แปลว่าคีย์บอร์ดเด้งขึ้นมาทุกครั้งที่แตะ — ขัดกับที่ตกลงกันไว้ว่าแตะ =
-          // คลิกอย่างเดียว จึงต้องคืนสถานะ focus กลับเป็นเหมือนก่อนแตะ
-          const wasVisible = keyboardVisible();
+          // xterm อาจโฟกัส textarea ของตัวเองระหว่าง synthetic click แต่
+          // inputMode="none" ของ physical mode กัน IME ไม่ให้เด้งกลับมาแล้ว
+          // การเปิดลิงก์ภายนอกยังอาจปล่อย terminal focus ได้ตามปกติ
 
           // mousemove สังเคราะห์คือตัว "ถาม" ว่าตรงนี้มีลิงก์ไหม — linkifier ของ
           // xterm ตั้ง _currentLink ใน handler ของ mousemove เท่านั้น ถ้าไม่ยิงนำ
@@ -455,7 +454,7 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
             },
           ) ?? false;
 
-          if (!wasVisible || opened) t.blur();
+          if (opened) t.blur();
           return;
         }
 
@@ -464,16 +463,12 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
         // ต้องตั้ง buttons: 1 บน mousemove ด้วย ไม่ใช่แค่ mousedown — ไม่งั้น xterm
         // เข้ารหัสเป็น "เลื่อนเมาส์เฉยๆ" ไม่ใช่ "ลากทั้งที่กดปุ่มอยู่" แล้ว TUI จะไม่ลาก
         case 'dragStart': {
-          // เหตุผลเดียวกับ tap: xterm โฟกัส textarea ใน handler ของ mousedown
-          // ต้องคืน focus กลับทันที ไม่ใช่รอตอน dragEnd ไม่งั้นคีย์บอร์ดจะเด้งขึ้นมา
-          // บังครึ่งจอตลอดเวลาที่กำลังลาก ซึ่งคือช่วงที่ต้องมองผลลัพธ์ที่สุด
-          //
-          // blur แล้ว mouse report ยังส่งต่อได้ปกติ — listener ของการลากอยู่ที่
+          // xterm อาจโฟกัส helper textarea ระหว่าง mousedown แต่ physical mode
+          // กัน IME ไว้ด้วย inputMode="none" จึงปลอดภัยที่จะคง focus ไว้
+          // mouse reporting ยังส่งต่อได้ตามเดิม — listener ของการลากอยู่ที่
           // document และ sendEvent ของ xterm ไม่ได้เช็ค focus เลย
-          const wasVisible = keyboardVisible();
           navigator.vibrate?.(10);   // บอกผู้ใช้ว่าเข้าโหมดลากแล้ว ไม่งั้นเดาไม่ถูก
           target.dispatchEvent(new MouseEvent('mousedown', mouseInit(g.x, g.y, { button: 0, buttons: 1 })));
-          if (!wasVisible) t.blur();
           return;
         }
 

@@ -1,125 +1,237 @@
-# Physical Keyboard Focus Preservation
+# Independent Terminal Focus and IME Visibility
 
 Date: 2026-08-20
-Status: Implemented with automated coverage; target-device validation pending
+Status: Approved design; implementation plan pending
 
-## Problem
+## Goal
 
-The terminal works correctly with Android's on-screen keyboard. With a Bluetooth
-keyboard, however, only the first one or two keys reach the PTY before xterm's hidden
-textarea loses focus. Further physical keystrokes then go nowhere until the user
-focuses the terminal again.
+Bluetooth keyboard input must work immediately after the terminal session opens and
+must continue after Android hides its on-screen keyboard. Users must not need to open
+the IME first merely to focus xterm.
 
-## Current behavior and likely root cause
+## Confirmed root cause
 
-`web/main.ts` listens to `visualViewport.resize`. When the viewport changes from
-"soft keyboard visible" to "soft keyboard hidden" while xterm's textarea is still
-focused, it calls `t.blur()` through `shouldReleaseFocus()`.
+xterm receives keyboard events only through its hidden helper textarea. The current app
+uses focus as part of its IME visibility policy:
 
-That behavior was added in commit `ebbf7cc` for a different Android case: pressing
-the OS hide-keyboard button hides the IME without blurring its textarea, and the next
-touch can otherwise reopen the IME. The current predicate cannot distinguish that
-explicit dismissal from Android automatically retracting the IME after a Bluetooth
-keyboard begins sending physical `keydown` events. In both cases it sees:
+- `startSession()` creates xterm but does not focus it.
+- `openKeyboard()` calls `blur()` then `focus()`, so Bluetooth input begins working only
+  after the user taps `⌨`.
+- A visible-to-hidden `visualViewport` transition may call `t.blur()`, so hiding the IME
+  also disconnects the physical keyboard.
 
-```text
-visualViewport: keyboard visible -> keyboard hidden
-textarea: focused
-```
+The accepted-input correlation added in commit `e0d46d2` prevents one blur when a
+Bluetooth key causes the IME to retract. It cannot help when the textarea started
+unfocused, because no key reaches xterm or `onData` in that state.
 
-The reported delay of one or two accepted keys is consistent with event ordering:
-the physical key reaches xterm first, Android retracts the IME, the viewport resize
-arrives afterward, and the application's resize handler blurs the textarea.
+The architectural error is treating two independent states as one:
 
-This is the leading hypothesis, not yet a device-measured conclusion. The normal
-investigation path is to capture the ordering on the affected device and verify that
-the application's visible-to-hidden viewport handler is the source of the blur.
+1. whether xterm owns terminal input focus;
+2. whether the Android IME is allowed to appear.
 
-On 2026-08-20, the user explicitly authorized implementation without ADB. Automated
-regression coverage therefore gates the code change, while the target-device trace and
-Bluetooth-keyboard acceptance checks remain required before claiming device validation.
+## Behavioral contract
 
-## Desired behavior
-
-- A Bluetooth or otherwise physical keyboard keeps xterm's textarea focused when
-  Android retracts the on-screen keyboard in response to physical input.
-- Physical character, navigation, modifier, and control keys continue through xterm
-  and `web/input-pipeline.ts` without a parallel byte path.
-- Pressing Android's own hide-keyboard control still releases textarea focus, preserving
-  the fix from commit `ebbf7cc`.
-- The explicit `⌨` control remains the only app-provided way to open or close the IME.
-- Selection mode continues to own focus and may still blur the textarea immediately.
-- Touch gestures, sticky modifiers, and responsive keybar behavior remain unchanged.
+- After session start, xterm owns focus in physical-keyboard mode and Bluetooth typing
+  works without first opening the IME.
+- Physical-keyboard mode keeps the helper textarea focused with `inputMode = "none"`.
+- Tapping `⌨` while the IME is hidden enters soft-keyboard mode and opens the IME.
+- Tapping `⌨` while the IME is visible returns to physical-keyboard mode, hides the IME,
+  and leaves xterm focused.
+- Android's native hide-keyboard action returns to physical-keyboard mode without
+  blurring xterm.
+- Touching, tapping, dragging, or swiping the terminal in physical-keyboard mode must
+  not reopen the IME.
+- Selection mode continues to blur xterm and rejects both physical and soft keyboard
+  input while active. Leaving selection restores physical-keyboard mode and focus.
+- Login, password, and settings inputs may own focus normally. The terminal must not
+  steal focus through a global focus or keyboard listener.
+- All terminal bytes continue through xterm and `web/input-pipeline.ts`; no document-
+  level key encoder or parallel WebSocket path is added.
 
 ## Design
 
-### 1. Confirm event ordering on the target device
+### Focus-mode controller
 
-Use a temporary, uncommitted event trace on xterm's helper textarea and
-`visualViewport`. Record `keydown`, textarea `focus`/`blur`, viewport `resize`,
-`document.activeElement`, viewport dimensions, `KeyboardEvent.key`,
-`KeyboardEvent.code`, `KeyboardEvent.keyCode`, and `isComposing`.
+Add a small pure controller in a focused module, `web/keyboard-focus-mode.ts`. It owns
+the desired terminal input mode but performs no DOM operations itself.
 
-Run two traces:
+```ts
+export type TerminalFocusMode = 'physical' | 'soft' | 'suspended';
 
-1. Open the IME, type with the Bluetooth keyboard until focus is lost.
-2. Open the IME and press Android's hide-keyboard control without using the Bluetooth
-   keyboard.
+export type TerminalFocusEffect =
+  | { type: 'focus'; inputMode: 'none' | 'text'; cycle: boolean }
+  | { type: 'blur' }
+  | { type: 'none' };
 
-Proceed with the design below only if trace 1 shows a usable physical-key marker before
-the visible-to-hidden resize and trace 2 does not. If the blur comes from a different
-listener or xterm itself, stop and revise this design from that evidence.
+export interface TerminalFocusState {
+  mode: TerminalFocusMode;
+}
+```
 
-### 2. Observe accepted terminal input
+Transitions:
 
-The first implementation tried to classify physical input from xterm's `onKey` DOM
-event. Real-device feedback disproved that assumption: the first Bluetooth key reached
-the terminal, but the marker was not armed before the IME retraction blurred the
-textarea. xterm may accept browser input through `keydown`, `keypress`, or `input`, and
-viewport geometry may already report the IME hidden by the time those callbacks run.
+| Event | Next mode | Effect |
+|---|---|---|
+| session ready | physical | focus with `inputMode="none"`; no focus cycle |
+| request IME open | soft | set `inputMode="text"`, then blur/focus in the same user gesture |
+| request IME close | physical | set `inputMode="none"`, then blur/focus in the same user gesture |
+| native IME hidden | physical | set `inputMode="none"`; retain existing textarea focus |
+| selection entered | suspended | blur |
+| selection exited | physical | focus with `inputMode="none"`; no focus cycle |
+| another real input owns focus | suspended | no terminal refocus |
+| terminal directly activated | physical or soft, unchanged | focus using the current input mode |
 
-Use xterm's `onData` event instead. It is the reliable application boundary proving that
-xterm accepted input, regardless of which browser event produced it. This listener is
-observational only; bytes still pass through `web/input-pipeline.ts` exactly once.
+`cycle: true` means blur then focus synchronously. It is used only by the explicit `⌨`
+control, where a user activation is available and Android requires the focus edge to
+open or close the IME reliably. Native IME dismissal does not cycle focus because the
+IME is already hidden and physical input must remain attached.
 
-### 3. Preserve focus for the associated viewport transition
+### DOM adapter
 
-When xterm's `onData` event reports accepted input, record its monotonic timestamp
-without consulting the current viewport geometry. When a visible-to-hidden viewport
-transition arrives, suppress `t.blur()` only if accepted input was observed in the
-immediately preceding 1,000 ms. Consume
-that marker after evaluating the transition so it cannot mask a later, unrelated IME
-dismissal.
+`web/main.ts` applies controller effects through one adapter around xterm's helper
+textarea:
 
-Keep the existing release rule unchanged when there is no recent physical marker.
-Actual textarea blur and an IME hidden-to-visible transition must clear the marker;
-those paths already cover app keyboard toggles and selection mode without adding reset
-calls to every `t.blur()` site. Encapsulate the marker in a small pure controller so
-tests exercise complete accepted-input → viewport transition sequences rather than only
-disconnected predicates.
+1. Set `t.textarea.inputMode` before focusing.
+2. For `cycle: true`, call `t.blur()` followed immediately by `t.focus()`.
+3. For ordinary physical focus, call `t.focus()` without a preceding blur.
+4. Never focus while selection mode is active or while a visible non-terminal input
+   owns `document.activeElement`.
 
-The 1,000 ms window is not a keyboard mode timeout; it only correlates one key event
-with the asynchronous viewport resize it caused. It is deliberately long enough for a
-mobile viewport animation and short enough not to affect a later user action.
+The adapter centralizes all mode-driven `inputMode`, `focus()`, and `blur()` operations.
+The selection touch path still blurs because selection geometry cannot tolerate an IME
+transition. Ordinary tap and drag paths must stop blurring merely because the IME is
+hidden; `inputMode="none"` now prevents the unwanted IME opening while preserving
+physical focus.
 
-### 4. Verification
+### Session start
 
-Unit tests cover accepted-input correlation and focus-release decisions. Target-device
-checks cover the browser/OS behavior that Vitest cannot model:
+After `initTerminal()` has opened xterm and the app page is visible, enter physical mode
+before awaiting the WebSocket connection. `inputMode="none"` is set before `t.focus()`,
+so programmatic focus does not request the IME. No user activation is required to route
+later physical keyboard events to the focused textarea.
 
-- Bluetooth keyboard input continues for at least 30 mixed keys after the IME retracts.
-- Android's hide-keyboard control still leaves the textarea unfocused.
-- Reopening the IME with `⌨` still works.
-- Disconnecting the Bluetooth keyboard and returning to the on-screen keyboard still
-  works.
-- Selection mode still prevents keyboard focus.
+### Keyboard controls and viewport transitions
+
+Replace `toggleKeyboard()`'s focus-as-visibility behavior with controller events:
+
+- The `⌨` button still uses `keyboardVisible()` to choose open versus close.
+- Open requests soft mode and a `text` blur/focus cycle.
+- Close requests physical mode and a `none` blur/focus cycle.
+- A `visualViewport` visible-to-hidden transition dispatches `native IME hidden`; it no
+  longer calls `t.blur()`.
+
+The accepted-input timing guard becomes unnecessary and is removed. It solved only the
+symptom created by the old blur policy, not the unfocused-session root cause.
+
+### Touch and selection
+
+xterm already focuses its textarea from terminal mouse activation. In physical mode,
+the textarea has `inputMode="none"`, so this preserves hardware focus without opening
+the IME. Remove the current post-tap `!wasVisible` blur and post-drag `!wasVisible` blur.
+Opening an external link may still blur. Existing synthetic mouse flags, mouse reporting,
+gesture recognition, and selection geometry remain unchanged.
+
+Selection remains an explicit suspension boundary:
+
+- entering selection sets suspended mode before blurring;
+- xterm's Linux-selection focus guard continues to blur any focus attempt while active;
+- closing/cancelling selection exits to physical mode, sets `inputMode="none"`, and
+  restores focus only after selection is inactive.
+
+No global `keydown`, `focus`, or `blur` loop is added. This prevents the terminal from
+stealing focus from the login password or keybar customization inputs.
+
+### Compatibility fallback
+
+The target is Android Chrome, where `HTMLTextAreaElement.inputMode = "none"` is expected
+to suppress the virtual keyboard. Browser support must be verified on the affected
+device. If the browser ignores `inputMode="none"`, do not add a document-level key
+encoder or synthesize character events as a fallback; those approaches lose keyboard
+layout, composition, dead-key, and terminal-mode fidelity. Record the unsupported
+browser and keep the existing explicit `⌨` behavior there.
 
 ## Files
 
-- `web/keyboard-visibility.ts`: accepted-input correlation and focus-release decision.
-- `web/keyboard-visibility.test.ts`: regression matrix for both IME dismissal paths.
-- `web/main.ts`: capture physical key timing and pass it into the pure decision.
-- `README.md`: document physical keyboard focus behavior and the viewport distinction.
+- Create `web/keyboard-focus-mode.ts`: pure state transitions and effects.
+- Create `web/keyboard-focus-mode.test.ts`: transition matrix and regression sequences.
+- Modify `web/main.ts`: DOM adapter, session-start focus, keyboard toggle, viewport, and
+  selection integration; remove hidden-IME blur from ordinary terminal tap and drag.
+- Modify `web/keyboard-visibility.ts`: remove the accepted-input focus guard while
+  retaining viewport-based IME visibility detection.
+- Modify `web/keyboard-visibility.test.ts`: remove obsolete guard tests; preserve native
+  visibility tests.
+- Modify `README.md`: document separate terminal-focus and IME-visibility states.
 
-No server, PTY, WebSocket, input-pipeline, keybar layout, CSS, or dependency changes are
-needed.
+No server, PTY, WebSocket, authentication, keybar layout, CSS, dependency, or terminal
+input-pipeline change is required.
+
+## Testing
+
+### Automated
+
+- Physical mode always requests `inputMode="none"` and focus.
+- Soft mode always requests `inputMode="text"` with a focus cycle.
+- Native IME dismissal returns to physical mode without blur.
+- Explicit IME close returns to physical mode with a cycle.
+- Selection entry blurs and selection exit restores physical mode.
+- Suspended mode does not automatically reclaim focus from another input.
+- Ordinary terminal tap and drag in physical mode retain textarea focus without opening
+  the IME; selection entry still blurs.
+- Existing keyboard visibility, input pipeline, keybar, touch gesture, and selection
+  suites remain green.
+- Run `pnpm test` and `pnpm build`.
+
+### Android acceptance
+
+1. Start a session and type at least 30 mixed Bluetooth keys without ever opening the
+   IME. The first key and every subsequent key must reach the PTY.
+2. Tap `⌨`, type with the soft keyboard, then type with Bluetooth while the IME retracts.
+   Focus and input must continue.
+3. Hide the IME using Android's native control, then type with Bluetooth immediately.
+4. Toggle `⌨` open and closed repeatedly; physical input must work after every close.
+5. Tap, swipe, drag, and pinch the terminal in physical mode; the IME must stay hidden.
+6. Enter selection mode; both keyboards must stop affecting the terminal. Exit selection
+   and verify Bluetooth input resumes without opening the IME.
+7. Focus the login/password or a settings input and verify terminal focus does not steal
+   its keystrokes.
+
+## Scrutinize review history
+
+### Iteration 1
+
+**Verdict before revision:** rework.
+
+- **Finding:** A global `keydown` listener that focuses xterm cannot deliver the first
+  physical key. **Why it matters:** the event target is fixed before dispatch, while
+  xterm's keyboard listeners are attached to its textarea. **Addressed:** the textarea
+  remains focused in physical mode instead of attempting reactive focus.
+- **Finding:** Keeping ordinary textarea focus would reintroduce the Android IME rebound
+  fixed by commit `ebbf7cc`. **Why it matters:** hidden IME and focused text input were
+  previously enough for later touch interaction to reopen it. **Addressed:** physical
+  mode combines retained focus with `inputMode="none"`.
+
+### Iteration 2
+
+**Verdict before revision:** fix-then-ship.
+
+- **Finding:** Changing `inputMode` alone does not define reliable explicit open/close
+  behavior. **Why it matters:** Android may require a new focus edge to attach or detach
+  the IME. **Addressed:** `⌨` transitions set input mode first, then synchronously
+  blur/focus; native dismissal retains focus without cycling.
+- **Finding:** Session-start behavior was unspecified. **Why it matters:** fixing only
+  post-IME transitions still leaves Bluetooth input dead when the user never opens the
+  IME. **Addressed:** session start enters focused physical mode before connection wait.
+
+### Iteration 3
+
+**Verdict before revision:** fix-then-ship.
+
+- **Finding:** An unconditional focus-restoration listener would steal input from real
+  form controls and fight selection mode. **Why it matters:** the app contains password
+  and customization inputs, while selection deliberately owns focus state. **Addressed:**
+  there is no global refocus loop; only explicit controller transitions restore focus,
+  and suspended mode protects other inputs and selection.
+- **Finding:** The accepted-input timing guard would become dead complexity under the
+  new focus policy. **Why it matters:** two competing focus mechanisms would make future
+  regressions harder to reason about. **Addressed:** the design removes the timing guard
+  and makes the focus-mode controller the single policy owner.

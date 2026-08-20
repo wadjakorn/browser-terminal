@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-20-physical-keyboard-focus-design.md`
 
+**Execution status (2026-08-20):** Tasks 2 and 3 are implemented. The user explicitly
+authorized proceeding without ADB, so Task 1 and Task 4's target-device checks remain
+pending; automated tests, build verification, and documentation are complete.
+
 ## Global Constraints
 
 - Use Node.js 22+ and pnpm.

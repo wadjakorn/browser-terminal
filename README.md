@@ -245,6 +245,11 @@ recognizer ไม่รวบสองแตะเป็นท่าของต
   เงียบๆ อาการคือล็อกอินสำเร็จแล้ววนกลับหน้า login
 - **`focus` ไม่ใช่ตัวชี้วัดว่าคีย์บอร์ดบนจอเปิดอยู่** — Android ซ่อนคีย์บอร์ดโดยไม่ blur
   ใช้ `keyboard-visibility.ts` ที่วัดจาก `visualViewport` เท่านั้น
+- **physical keyboard ต้องไม่เสีย focus ตอน Android หด IME** — `keydown` จาก
+  Bluetooth keyboard อาจตามด้วย `visualViewport` ที่เปลี่ยนจากเห็น → ซ่อนเหมือนกับ
+  ปุ่มซ่อนคีย์บอร์ดของ Android แต่กรณีแรกต้องคง helper textarea ของ xterm ไว้ ส่วน
+  กรณีหลังยังต้องปล่อย focus ดู classifier และ one-shot resize correlation ใน
+  `keyboard-visibility.ts`; ห้ามกลับไป blur ทุกครั้งที่ IME หดโดยไม่มีเงื่อนไข
 - **การลากต้องตั้ง `buttons: 1` บน `mousemove` ด้วย ไม่ใช่แค่ `mousedown`** — xterm
   แยก "ลากทั้งที่กดปุ่มอยู่" ออกจาก "เลื่อนเมาส์เฉยๆ" ด้วยฟิลด์นี้ล้วนๆ และ listener
   ของการลากอยู่ที่ `document` ไม่ใช่ที่ `term.element`

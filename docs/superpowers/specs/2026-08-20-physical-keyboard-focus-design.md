@@ -1,7 +1,7 @@
 # Physical Keyboard Focus Preservation
 
 Date: 2026-08-20
-Status: Root-cause hypothesis established from code history; target-device trace required before implementation
+Status: Implemented with automated coverage; target-device validation pending
 
 ## Problem
 
@@ -31,9 +31,13 @@ The reported delay of one or two accepted keys is consistent with event ordering
 the physical key reaches xterm first, Android retracts the IME, the viewport resize
 arrives afterward, and the application's resize handler blurs the textarea.
 
-This is the leading hypothesis, not yet a device-measured conclusion. Before changing
-production behavior, capture the ordering on the affected device and verify that the
-application's visible-to-hidden viewport handler is the source of the blur.
+This is the leading hypothesis, not yet a device-measured conclusion. The normal
+investigation path is to capture the ordering on the affected device and verify that
+the application's visible-to-hidden viewport handler is the source of the blur.
+
+On 2026-08-20, the user explicitly authorized implementation without ADB. Automated
+regression coverage therefore gates the code change, while the target-device trace and
+Bluetooth-keyboard acceptance checks remain required before claiming device validation.
 
 ## Desired behavior
 
@@ -97,8 +101,8 @@ Keep the existing release rule unchanged when there is no recent physical marker
 Actual textarea blur and an IME hidden-to-visible transition must clear the marker;
 those paths already cover app keyboard toggles and selection mode without adding reset
 calls to every `t.blur()` site. Encapsulate the marker in a small pure controller so
-tests exercise complete keydown → viewport
-transition sequences rather than only disconnected predicates.
+tests exercise complete keydown → viewport transition sequences rather than only
+disconnected predicates.
 
 The 1,000 ms window is not a keyboard mode timeout; it only correlates one key event
 with the asynchronous viewport resize it caused. It is deliberately long enough for a

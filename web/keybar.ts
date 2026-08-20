@@ -18,6 +18,7 @@ import {
   type KeybarPreferences,
 } from './keybar-preferences.js';
 import { bindPressRepeat } from './press-repeat.js';
+import { fullscreenPresentation } from './fullscreen.js';
 import {
   beginExpansion,
   beginRestoration,
@@ -81,6 +82,24 @@ export function applyKeyboardVisibility(
   container.classList.toggle('keyboard-visible', visible);
 }
 
+export function applyFullscreenButton(
+  button: {
+    hidden: boolean;
+    title: string;
+    classList: { toggle(token: string, force?: boolean): boolean | void };
+    setAttribute(name: string, value: string): void;
+  },
+  supported: boolean,
+  active: boolean,
+): void {
+  const state = fullscreenPresentation(supported, active);
+  button.hidden = !state.visible;
+  button.classList.toggle('active', state.active);
+  button.setAttribute('aria-pressed', String(state.active));
+  button.setAttribute('aria-label', state.label);
+  button.title = state.label;
+}
+
 export function keybarVisibleLabels(preferences: KeybarPreferences): string[] {
   return resolveKeySpecs(visibleKeyIds(preferences)).map(key => key.label);
 }
@@ -100,6 +119,7 @@ export interface MountedKeybar {
   onViewportFrame: (visualHeight: number) => void;
   onViewportSettled: (keyboardVisible: boolean) => void;
   onOrientationChange: () => void;
+  syncFullscreen: () => void;
 }
 
 export function mountKeybar(container: HTMLElement, handlers: {
@@ -110,6 +130,8 @@ export function mountKeybar(container: HTMLElement, handlers: {
   onToggleKeyboard: () => void;
   onOpenKeyboard: () => void;
   onRequestKeyboardClose: () => void;
+  onToggleFullscreen: () => void;
+  fullscreenState: () => { supported: boolean; active: boolean };
   viewport: () => { visualHeight: number; keyboardVisible: boolean };
   onPanelChange: (open: boolean) => void;
 }): MountedKeybar {
@@ -443,7 +465,13 @@ export function mountKeybar(container: HTMLElement, handlers: {
   });
   keyboardButton.title = 'เปิด/ปิดคีย์บอร์ด';
   keyboardButton.setAttribute('aria-label', 'เปิด/ปิดคีย์บอร์ด');
-  controls.append(moreButton, settingsButton, keyboardButton);
+  const fullscreenButton = makeButton('⛶', handlers.onToggleFullscreen);
+  const syncFullscreen = () => {
+    const state = handlers.fullscreenState();
+    applyFullscreenButton(fullscreenButton, state.supported, state.active);
+  };
+  syncFullscreen();
+  controls.append(moreButton, settingsButton, fullscreenButton, keyboardButton);
 
   const row = document.createElement('div');
   row.className = 'keybar-row';
@@ -489,5 +517,6 @@ export function mountKeybar(container: HTMLElement, handlers: {
       clearTransitionTimer();
       updateView();
     },
+    syncFullscreen,
   };
 }

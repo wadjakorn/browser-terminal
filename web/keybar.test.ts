@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  applyFullscreenButton,
   applyKeyboardVisibility,
   applyKeybarView,
   foldAction,
@@ -37,6 +38,25 @@ describe('shared key inventory', () => {
 });
 
 describe('keybar surface state', () => {
+  it('hides unsupported fullscreen and synchronizes active accessibility state', () => {
+    const button = {
+      hidden: false,
+      title: '',
+      classList: { toggle: vi.fn() },
+      setAttribute: vi.fn(),
+    };
+
+    applyFullscreenButton(button, false, false);
+    expect(button.hidden).toBe(true);
+
+    applyFullscreenButton(button, true, true);
+    expect(button.hidden).toBe(false);
+    expect(button.classList.toggle).toHaveBeenLastCalledWith('active', true);
+    expect(button.setAttribute).toHaveBeenCalledWith('aria-pressed', 'true');
+    expect(button.setAttribute).toHaveBeenCalledWith('aria-label', 'ออกจากเต็มหน้าจอ');
+    expect(button.title).toBe('ออกจากเต็มหน้าจอ');
+  });
+
   it('restores only the keyboard displaced by this panel expansion', () => {
     expect(foldAction(beginExpansion(initialKeyboardSurface(), true, 420)))
       .toBe('restore-keyboard');

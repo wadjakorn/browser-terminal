@@ -11,6 +11,7 @@ import { createTextSelection, selectionMouseInit, type TerminalPort } from './te
 import { createSelectionSheet } from './selection-sheet.js';
 import { createClipboard } from './clipboard.js';
 import { loadSelectionPrefs } from './selection-prefs.js';
+import { createFullscreenController } from './fullscreen.js';
 import { createLinkOpener, type LinkOpener } from './links.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
@@ -32,6 +33,7 @@ let selection: ReturnType<typeof createTextSelection> | null = null;
  */
 let stopGestures: (() => void) | null = null;
 const clipboard = createClipboard();
+const fullscreen = createFullscreenController(document);
 
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
@@ -114,6 +116,17 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     onToggleKeyboard: () => toggleKeyboard(t),
     onOpenKeyboard: () => openKeyboard(t),
     onRequestKeyboardClose: () => t.blur(),
+    onToggleFullscreen: () => {
+      void fullscreen.toggle().then(result => {
+        if (result === 'rejected') {
+          showStatus('เบราว์เซอร์ไม่อนุญาตให้เปิดเต็มหน้าจอ');
+        }
+      });
+    },
+    fullscreenState: () => ({
+      supported: fullscreen.supported(),
+      active: fullscreen.active(),
+    }),
     viewport: () => ({
       visualHeight: window.visualViewport?.height ?? window.innerHeight,
       // บน desktop keyboardVisible() ใช้ focus เพื่อให้ปุ่ม ⌨ toggle ได้ แต่ focus
@@ -126,6 +139,11 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     onPanelChange: () => {
       requestAnimationFrame(() => sendResize());
     },
+  });
+
+  fullscreen.subscribe(() => {
+    keybar.syncFullscreen();
+    requestAnimationFrame(() => sendResize());
   });
 
   resetInputModifiers = () => {

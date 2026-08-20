@@ -22,6 +22,28 @@ export interface TerminalFocusTransition {
   effect: TerminalFocusEffect;
 }
 
+export interface TerminalFocusPort {
+  textarea?: { inputMode: string };
+  focus(): void;
+  blur(): void;
+  canFocus?(): boolean;
+}
+
+export function applyTerminalFocusEffect(
+  port: TerminalFocusPort,
+  effect: TerminalFocusEffect,
+): void {
+  if (effect.type === 'none') return;
+  if (effect.type === 'blur') {
+    port.blur();
+    return;
+  }
+  if (!port.textarea || port.canFocus?.() === false) return;
+  port.textarea.inputMode = effect.inputMode;
+  if (effect.cycle) port.blur();
+  port.focus();
+}
+
 export function initialTerminalFocusState(): TerminalFocusState {
   return { mode: 'suspended' };
 }

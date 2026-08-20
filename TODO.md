@@ -19,11 +19,11 @@
 
 ## ความปลอดภัย — ควรทำก่อนเปิด repo เป็น public
 
-### ชื่อใน LICENSE ยังเป็นของเก่า
+### `package.json` ยังมี `"private": true`
 
-`LICENSE` เขียนว่า `browser-console contributors` แต่ repo ชื่อ `browser-terminal`
-แล้ว และ `package.json` ยังมี `"private": true` ซึ่งไม่ได้ห้าม repo เป็น public
-แต่ควรเอาออกถ้าคิดจะ publish ลง npm สักวัน
+ไม่ได้ห้าม repo เป็น public และตอนนี้มันคือกันเผลอ `npm publish` ซึ่งเป็นเรื่องดี
+เอาออกเมื่อตัดสินใจว่าจะ publish ลง npm จริงเท่านั้น — เป็นการตัดสินใจของเจ้าของ
+ไม่ใช่การเก็บกวาดโค้ด
 
 ### เอกสารทั้ง repo เป็นภาษาไทยล้วน
 
@@ -32,38 +32,6 @@ README, คอมเมนต์ในโค้ด, ข้อความ error 
 กับข้อความ error ควรมีภาษาอังกฤษด้วย
 
 ## ความทนทาน
-
-### `SHELL_CMD` ไม่ถูก trim
-
-`server/config.ts:129` — `env.SHELL_CMD || 'herdr'` ใช้ค่าดิบ ถ้า `.env` มีช่องว่าง
-ต่อท้าย (`SHELL_CMD=bash `) จะ spawn คำสั่งชื่อ `"bash "` แล้วตายด้วย ENOENT
-ที่อ่านไม่รู้เรื่อง เพราะช่องว่างมองไม่เห็นในข้อความ error
-
-แก้: `.trim()` แล้วเช็คว่าไม่ว่างหลัง trim
-
-### `readJsonBody` ไม่ปิด stream ตอน body ใหญ่เกิน
-
-`server/index.ts:29-38` — throw ออกจาก `for await` แต่ไม่เรียก `req.destroy()`
-ฝั่งที่ส่งจะยังไถ byte ต่อไปจนหมดหรือ timeout กิน socket ไว้ฟรีๆ ยิงพร้อมกันหลาย
-request ก็กิน fd ได้ (จำกัดที่ 4096 byte แล้วจึงไม่ใช่ช่องหน่วยความจำ)
-
-แก้: `req.destroy()` ก่อน throw + เพิ่มเทสว่า body เกินลิมิตได้ 401 ไม่ใช่ค้าง
-
-### `socket.onclose` ไม่เช็คว่าเป็น socket ตัวปัจจุบัน
-
-`web/main.ts:297` — ตั้ง `ws = null` โดยไม่เช็ค `socket === ws` ถ้า socket เก่าปิด
-ช้ากว่าตัวใหม่เปิด (เน็ตกระตุก แล้ว reconnect ทับ) handler ของตัวเก่าจะไป null
-ตัวใหม่ที่ต่อติดอยู่ อาการคือพิมพ์ไม่ออกทั้งที่จอยังสด
-
-แก้: `if (socket !== ws) return;` เป็นบรรทัดแรกของ handler
-
-### entrypoint guard เทียบแค่ basename
-
-`server/index.ts:179` — `import.meta.url.endsWith(process.argv[1].split('/').pop())`
-ไฟล์ชื่อ `index.js` ที่ path อื่นก็ผ่าน guard นี้ ตอนนี้ยังไม่มีผลเพราะมีไฟล์เดียว
-แต่ถ้าเพิ่ม entrypoint ที่สองจะกลายเป็นรัน server ซ้อนตอน import
-
-แก้: เทียบ path เต็มด้วย `fileURLToPath(import.meta.url) === resolve(process.argv[1])`
 
 ### `$<T>()` cast โดยไม่ตรวจ
 
@@ -76,7 +44,6 @@ request ก็กิน fd ได้ (จำกัดที่ 4096 byte แล�
   (`/../.env`, `..%2f`, `%2e%2e`, double-encode, backslash, absolute-form ผ่าน raw
   socket) รวมถึงยิงหาไฟล์ที่มีอยู่จริงนอก static root เพราะ SPA fallback บังผลได้
   เหลือแค่ทำให้เป็นเทสอัตโนมัติ กันคนแก้ `serveStatic` แล้วเปิดช่องโดยไม่รู้ตัว
-- **body ใหญ่เกินลิมิต** — ผูกกับข้อ `readJsonBody` ข้างบน
 - **`COLORTERM=truecolor`** — `server/pty.ts:33` ตั้งไว้แต่ไม่มีเทสว่าไปถึง shell จริง
 - **ctrl+alt กับตัวที่แปลงไม่ได้** — `input-pipeline.ts` ยังไม่มีเทสเคสนี้
 

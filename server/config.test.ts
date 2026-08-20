@@ -69,6 +69,18 @@ describe('cookieSecure — ตัดสินจาก PUBLIC_ORIGIN ไม่�
   });
 });
 
+describe('SHELL_CMD', () => {
+  it('ตัดช่องว่างหัวท้ายทิ้ง', () => {
+    // ช่องว่างต่อท้ายใน .env มองไม่เห็น แต่ทำให้ spawn คำสั่งชื่อ "bash " แล้วตาย
+    // ด้วย ENOENT ที่อ่านแล้วไม่รู้เลยว่าปัญหาอยู่ตรงไหน
+    expect(loadConfig({ ...full, SHELL_CMD: '  bash  ' }).shellCmd).toBe('bash');
+  });
+
+  it('ค่าที่มีแต่ช่องว่างถือว่าไม่ได้ตั้ง ใช้ default', () => {
+    expect(loadConfig({ ...full, SHELL_CMD: '   ' }).shellCmd).toBe('herdr');
+  });
+});
+
 describe('origins ที่อนุญาต', () => {
   it('PUBLIC_ORIGIN ถูกอนุญาตเสมอโดยไม่ต้องประกาศซ้ำ', () => {
     expect(loadConfig(full).allowedOrigins).toEqual(['https://a.example']);

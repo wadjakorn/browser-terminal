@@ -1,0 +1,17 @@
+[Unit]
+Description=herdr server — terminal multiplexer daemon
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=%h/.local/bin/herdr server
+ExecStop=%h/.local/bin/herdr server stop
+Restart=on-failure
+RestartSec=3
+# herdr ใช้ค่านี้เป็น cwd ตั้งต้นของ pane ที่เปิดใหม่
+Environment=HERDR_STARTUP_CWD=%h
+# pane ทุกอันเป็นลูกของ server ตัวนี้ ต้องอยู่ใน cgroup นี้และตายพร้อมกันจริง ๆ
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

@@ -114,11 +114,42 @@ server จะไม่ยอม start ถ้า config อันตราย —
 
 ### รันเป็น systemd user service
 
+ติดตั้ง **สอง** unit เสมอ:
+
 ```bash
-cp browser-console.service ~/.config/systemd/user/
+cp browser-console.service herdr-server.service ~/.config/systemd/user/
 systemctl --user daemon-reload
+systemctl --user enable --now herdr-server
 systemctl --user enable --now browser-console
 ```
+
+#### ทำไมต้องแยก herdr ออกเป็น unit ของตัวเอง
+
+ถ้าไม่แยก herdr server จะไปอยู่ใน cgroup ของ `browser-console.service`
+เพราะ `SHELL_CMD=herdr` ทำให้ทุก PTY เป็น herdr *client* และ client ตัวแรก
+spawn server ด้วย `setsid()` ซึ่งแยก session แต่ **ไม่แยก cgroup**
+พอ `KillMode` เป็นค่า default `control-group` การ `systemctl restart`
+ครั้งเดียวจะฆ่า herdr server กับ pane ทั้งหมด — งานของทุก agent หายพร้อมกัน
+
+`herdr-server.service` ต้องขึ้น **ก่อน** browser-console เสมอ (`After=`/`Wants=`
+ถูกตั้งไว้ให้แล้ว) เพื่อให้ client ที่ browser-console เปิดไปเกาะ server ที่มีอยู่
+แทนที่จะ spawn ตัวใหม่
+
+ตรวจว่าถูกต้องด้วย — `herdr server` ต้อง **ไม่** โผล่ในกลุ่มแรก:
+
+```bash
+systemd-cgls --user-unit browser-console.service   # ควรเหลือแค่ node + herdr client
+systemd-cgls --user-unit herdr-server.service      # ควรมี herdr server + pane ทั้งหมด
+```
+
+`browser-console.service` มี `KillMode=process` ไว้เป็นตาข่ายนิรภัยชั่วคราว
+สำหรับเครื่องที่ herdr server ยังค้างอยู่ใน cgroup เดิม **ถอดบรรทัดนั้นออก**
+เมื่อ `systemd-cgls` ยืนยันว่าแยกกันเรียบร้อยแล้ว เพราะ `KillMode=process`
+ทิ้งโปรเซสค้างไว้ใน cgroup ของ unit ที่หยุดไปแล้ว ทำให้ตัวเลข `Tasks:`/`Memory:`
+สะสมผิด
+
+> `systemctl --user restart herdr-server` **ฆ่า pane ทั้งหมด** เสมอ
+> ใช้เมื่อรู้ตัวเท่านั้น เช่นหลังอัปเดต herdr แล้ว client ต่อ server เก่าไม่ได้
 
 ---
 

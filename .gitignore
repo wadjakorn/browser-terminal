@@ -2,6 +2,8 @@ node_modules/
 dist/
 web/dist/
 .env
+.env.*
+!.env.example
 .superpowers/
 .session-epoch
 .claude/worktrees/

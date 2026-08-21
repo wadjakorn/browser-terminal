@@ -324,26 +324,30 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
 
 /*
  * keep synchronized with CONFIRM_BAR_HEIGHT_PX (48) in selection-handles.ts:
- * .sel-btn ใช้ border-box จึง min-height 2.5rem (40px) รวมเส้นขอบในตัว
- * แถบนี้ไม่มีเส้นขอบของตัวเอง (ใช้ box-shadow แทนเพื่อความลึกแทน) เหลือ 8px
- * ให้ padding บน+ล่างที่ .25rem (4px) ต่อด้าน รวมเป็น 40 + 4 + 4 = 48px พอดี
+ * .sel-btn สูง 2.75rem (44px, border-box รวมเส้นขอบในตัว) + padding บน/ล่างของ
+ * แถบนี้ที่ .125rem (2px) ต่อด้าน รวมเป็น 44 + 2 + 2 = 48px พอดี — ปุ่มยังคง
+ * แตะได้เต็ม 44px ตามมาตรฐานเดียวกับ KEY_TARGET_PX ไม่ต้องลดขนาดเพื่อยัดให้พอดี 48px
+ *
+ * เส้นขอบใช้ inset box-shadow แทน border จริง เพราะ inset ไม่กินพื้นที่ layout
+ * (border จริงจะบวกความสูงเพิ่มและทำให้เลข 48px ข้างบนคลาดเคลื่อน)
  */
 .sel-confirm {
   position: absolute; left: 50%;
   transform: translateX(-50%);
   display: flex; gap: .5rem;
-  padding: .25rem;
+  padding: .125rem .25rem;
   border-radius: .6rem;
   background: #15151c;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45), inset 0 0 0 1px #2e2e3a;
   pointer-events: auto;
 }
 
+/* แถบทับกรอบเมื่อทั้งเหนือและใต้ไม่พอที่ (เคส 'over') — โปร่งลงเล็กน้อยกันมันบังตัวอักษรที่ถูกเลือกทั้งหมด */
 .sel-confirm[data-side="over"] { opacity: .92; }
 
 .sel-btn {
   box-sizing: border-box;
-  min-width: 5rem; min-height: 2.5rem;
+  min-width: 5rem; min-height: 2.75rem; /* 44px; keep synchronized with KEY_TARGET_PX */
   font: inherit; color: var(--fg);
   background: #22222c;
   border: 1px solid #2e2e3a; border-radius: .45rem;

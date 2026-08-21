@@ -25,6 +25,7 @@ interface FakeOpts {
   viewportTop?: () => number;
   cellWidth?: number;
   prefs?: SelectionPrefs;
+  onBlockChange?: (block: unknown) => void;
 }
 
 function fakeTerminal(opts: FakeOpts = {}) {
@@ -58,7 +59,7 @@ function build(opts: FakeOpts = {}) {
   const loadPrefs = vi.fn(() => opts.prefs ?? { manualBounds: null, columns: 0 });
 
   const selection = createTextSelection({
-    terminal: fake.port, loadPrefs, onRegionPicked, onModeChange,
+    terminal: fake.port, loadPrefs, onRegionPicked, onModeChange, onBlockChange: opts.onBlockChange,
   });
   return { ...fake, selection, onRegionPicked, onModeChange, loadPrefs };
 }
@@ -105,6 +106,114 @@ describe('โหมดเลือก', () => {
     expect(dispatched).toEqual([]);
     expect(onRegionPicked).not.toHaveBeenCalled();
   });
+
+  it('ปล่อยนิ้วจบการลากแล้วเข้าโหมดปรับ ไม่ส่งข้อความออกไป', () => {
+    const seen: unknown[] = [];
+    const { selection, onRegionPicked } = build({ onBlockChange: b => seen.push(b) });
+    selection.toggle();
+    selection.pointerDown(...at(12, 1));
+    selection.pointerUp(...at(20, 3));
+    expect(onRegionPicked).not.toHaveBeenCalled();
+    expect(selection.state()).toBe('adjusting');
+    expect(selection.currentBlock()).toEqual({ topLine: 101, bottomLine: 103, startColumn: 12, endColumn: 20 });
+    expect(seen.at(-1)).toEqual(selection.currentBlock());
+  });
+
+  it('ลากหมุด start เปลี่ยนเฉพาะมุมบนซ้าย', () => {
+    const { selection } = build();
+    selection.toggle();
+    selection.pointerDown(...at(14, 2));
+    selection.pointerUp(...at(20, 4));
+    selection.beginHandleDrag('start');
+    selection.pointerMove(...at(12, 1));
+    selection.pointerUp(...at(12, 1));
+    expect(selection.currentBlock()).toEqual({ topLine: 101, bottomLine: 104, startColumn: 12, endColumn: 20 });
+  });
+
+  it('ลากหมุด end เปลี่ยนเฉพาะมุมล่างขวา', () => {
+    const { selection } = build();
+    selection.toggle();
+    selection.pointerDown(...at(14, 2));
+    selection.pointerUp(...at(20, 4));
+    selection.beginHandleDrag('end');
+    selection.pointerMove(...at(24, 5));
+    selection.pointerUp(...at(24, 5));
+    expect(selection.currentBlock()).toEqual({ topLine: 102, bottomLine: 105, startColumn: 14, endColumn: 24 });
+  });
+
+  it('ลากหมุดข้ามอีกมุมไป กรอบพลิกโดยไม่ค้าง', () => {
+    const { selection } = build();
+    selection.toggle();
+    selection.pointerDown(...at(14, 2));
+    selection.pointerUp(...at(20, 4));
+    selection.beginHandleDrag('start');
+    selection.pointerMove(...at(26, 5));
+    selection.pointerUp(...at(26, 5));
+    const block = selection.currentBlock()!;
+    expect(block.topLine).toBeLessThanOrEqual(block.bottomLine);
+    expect(block.startColumn).toBeLessThanOrEqual(block.endColumn);
+    expect(block).toEqual({ topLine: 104, bottomLine: 105, startColumn: 20, endColumn: 26 });
+  });
+
+  it('แตะที่ terminal ขณะปรับ = เริ่มกรอบใหม่ ทิ้งกรอบเดิม', () => {
+    const { selection } = build();
+    selection.toggle();
+    selection.pointerDown(...at(14, 2));
+    selection.pointerUp(...at(20, 4));
+    selection.pointerDown(...at(22, 0));
+    selection.pointerUp(...at(24, 1));
+    expect(selection.currentBlock()).toEqual({ topLine: 100, bottomLine: 101, startColumn: 22, endColumn: 24 });
+  });
+
+  it('confirm ส่งข้อความออกไปแต่ยังอยู่ในโหมด', () => {
+    const { selection, onRegionPicked } = build();
+    selection.toggle();
+    selection.pointerDown(...at(12, 1));
+    selection.pointerUp(...at(20, 2));
+    selection.confirm();
+    expect(onRegionPicked).toHaveBeenCalledTimes(1);
+    // at(12, ...) เริ่มที่คอลัมน์ 12 ไม่ใช่ 11 ('left' ขึ้นต้นที่คอลัมน์ 11) จึงได้ 'eft row'
+    expect(onRegionPicked.mock.calls[0]![0]).toContain('eft row');
+    expect(selection.active()).toBe(true);
+    expect(selection.state()).toBe('adjusting');
+  });
+
+  it('กรอบที่คลุมแต่ช่องว่างยังอยู่ให้ปรับต่อ ไม่ถูกล้างทิ้ง', () => {
+    const { selection, clearSelection } = build({ screen: ['          │              ', '          │              '] });
+    selection.toggle();
+    selection.pointerDown(...at(12, 0));
+    selection.pointerUp(...at(18, 1));
+    expect(selection.state()).toBe('adjusting');
+    expect(selection.currentBlock()).not.toBeNull();
+    expect(selection.blockHasText()).toBe(false);
+    expect(clearSelection).not.toHaveBeenCalled();
+  });
+
+  it('blockRect คืน null เมื่อไม่มีกรอบ และครอบเซลล์เต็มใบทั้งสองมุม', () => {
+    const { selection } = build();
+    expect(selection.blockRect()).toBeNull();
+    selection.toggle();
+    selection.pointerDown(...at(12, 1));
+    selection.pointerUp(...at(20, 3));
+    // at() คืนจุดกลางเซลล์ ขอบกรอบจึงห่างจากจุดนั้นครึ่งเซลล์ทั้งสองด้าน
+    expect(selection.blockRect()).toEqual({
+      left: LEFT + 12 * CELL_W,
+      top: TOP + 1 * CELL_H,
+      right: LEFT + 21 * CELL_W,
+      bottom: TOP + 4 * CELL_H,
+    });
+  });
+
+  it('การลากหมุดยังตรึงคอลัมน์ไว้ใน pane เดิม', () => {
+    const { selection } = build();
+    selection.toggle();
+    selection.pointerDown(...at(2, 1));   // ใน sidebar ซ้ายของเส้นแบ่งที่คอลัมน์ 10
+    selection.pointerUp(...at(6, 2));
+    selection.beginHandleDrag('end');
+    selection.pointerMove(...at(25, 3));  // ลากข้ามเส้นแบ่งไปฝั่งขวา
+    selection.pointerUp(...at(25, 3));
+    expect(selection.currentBlock()!.endColumn).toBeLessThan(10);
+  });
 });
 
 describe('การตัด sidebar ออกจากผลลัพธ์', () => {
@@ -115,6 +224,7 @@ describe('การตัด sidebar ออกจากผลลัพธ์', (
     selection.pointerDown(...at(11, 0));
     selection.pointerMove(...at(0, 2));    // ลากทะลุเส้นแบ่งไปถึงคอลัมน์ 0
     selection.pointerUp(...at(0, 2));
+    selection.confirm();
 
     const text = onRegionPicked.mock.calls[0]![0] as string;
     expect(text).not.toContain('│');
@@ -129,6 +239,7 @@ describe('การตัด sidebar ออกจากผลลัพธ์', (
     selection.pointerDown(...at(11, 0));
     selection.pointerMove(...at(29, 1));
     selection.pointerUp(...at(29, 1));
+    selection.confirm();
 
     expect(onRegionPicked).toHaveBeenCalledWith('left row one  right\nleft row two  right');
   });
@@ -140,6 +251,7 @@ describe('การตัด sidebar ออกจากผลลัพธ์', (
     selection.pointerDown(...at(0, 0));
     selection.pointerMove(...at(29, 2));
     selection.pointerUp(...at(29, 2));
+    selection.confirm();
 
     expect(onRegionPicked).toHaveBeenCalledWith('side one\nside two\nside three');
   });
@@ -151,6 +263,7 @@ describe('การตัด sidebar ออกจากผลลัพธ์', (
     selection.pointerDown(...at(10, 0));   // คอลัมน์ 10 คือตัวเส้นแบ่งเอง
     selection.pointerMove(...at(29, 2));
     selection.pointerUp(...at(29, 2));
+    selection.confirm();
 
     // เสมอกันเอา pane ซ้าย จุดยึดจึงถูกตรึงมาที่คอลัมน์ 9 ไม่ใช่ค้างที่ 10
     const backToColumn = (x: number) => Math.floor((x - LEFT) / CELL_W);
@@ -167,6 +280,7 @@ describe('การตัด sidebar ออกจากผลลัพธ์', (
     selection.pointerDown(...at(11, 0));
     selection.pointerMove(...at(11, 2));
     selection.pointerUp(...at(11, 2));
+    selection.confirm();
 
     expect(onRegionPicked).toHaveBeenCalledWith('l\nl\nl');
   });
@@ -194,6 +308,7 @@ describe('พิกัดที่ส่งให้ xterm', () => {
 
     selection.pointerDown(LEFT + 115, TOP - 500);   // เหนือแถวแรก
     selection.pointerUp(LEFT + 115, TOP + 5000);    // ใต้แถวสุดท้าย
+    selection.confirm();
 
     // ได้ทั้ง 6 แถวพอดี ไม่ใช่บรรทัดที่ไม่มีอยู่จริง
     expect((onRegionPicked.mock.calls[0]![0] as string).split('\n')).toHaveLength(6);
@@ -214,6 +329,7 @@ describe('พิกัดที่ส่งให้ xterm', () => {
     selection.pointerDown(...at(11, 0));
     top = 100;   // อ่านเนื้อหาเดิม แต่ยืนยันว่า anchor ถูกเก็บเป็นเลขสัมบูรณ์
     selection.pointerUp(...at(29, 0));
+    selection.confirm();
 
     expect(onRegionPicked).toHaveBeenCalledWith('left row one  right');
   });
@@ -245,7 +361,7 @@ describe('การล้างสถานะ', () => {
     expect(clearSelection).toHaveBeenCalled();
   });
 
-  it('เลือกได้แต่ข้อความว่าง: ไม่เปิดแผ่นผลลัพธ์ ล้างไฮไลต์ และยังอยู่ในโหมด', () => {
+  it('เลือกได้แต่ข้อความว่าง: ไม่เปิดแผ่นผลลัพธ์ ไม่ล้างไฮไลต์ ยังอยู่ในโหมดปรับ', () => {
     const blank = ['     ', '     ', '     ', '     ', '     '];
     const { selection, onRegionPicked, clearSelection } = build({ screen: blank });
     selection.toggle();
@@ -254,8 +370,9 @@ describe('การล้างสถานะ', () => {
     selection.pointerUp(...at(4, 2));
 
     expect(onRegionPicked).not.toHaveBeenCalled();
-    expect(clearSelection).toHaveBeenCalled();
+    expect(clearSelection).not.toHaveBeenCalled();
     expect(selection.active()).toBe(true);
+    expect(selection.state()).toBe('adjusting');
   });
 });
 

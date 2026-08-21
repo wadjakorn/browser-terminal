@@ -78,6 +78,8 @@ export interface SelectionHandles {
 
 export function createSelectionHandles(deps: {
   onGrab: (corner: 'start' | 'end') => void;
+  onDragMove: (x: number, y: number) => void;
+  onDragEnd: (x: number, y: number) => void;
   onConfirm: () => void;
   onCancel: () => void;
   document?: Document;
@@ -88,16 +90,53 @@ export function createSelectionHandles(deps: {
   root.className = 'sel-overlay';
   root.hidden = true;
 
+  /**
+   * นิ้วที่กดหมุดค้างเป็น target ของ touchmove/touchend อยู่ตลอดกัน แม้จะเลื่อนออกไป
+   * ไกลแค่ไหน (เบราว์เซอร์ผูก touch กับ element ที่ touchstart ไว้ ไม่ใช่ตำแหน่งปัจจุบัน)
+   * แต่หมุดเป็น element เล็กๆ ลอยอยู่บน .sel-overlay ที่ตรึงกับ #app ไม่ใช่ #terminal จึงไม่มี
+   * ทางที่ bindTouch ใน main.ts จะเห็นอีเวนต์ต่อจาก touchstart นี้เลย — ต้องฟังเองที่นี่
+   * ผูกที่ document ระหว่างลากเท่านั้นแล้วถอดทิ้งตอนปล่อยนิ้ว ไม่ผูกถาวร เพื่อไม่ให้ไป
+   * แย่งอีเวนต์ที่ควรเป็นของจุดอื่นในหน้าเมื่อไม่ได้กำลังลากหมุดอยู่
+   */
   const makeHandle = (corner: 'start' | 'end'): HTMLElement => {
     const handle = doc.createElement('div');
     handle.className = `sel-handle sel-handle-${corner}`;
     handle.setAttribute('role', 'slider');
     handle.setAttribute('aria-label', corner === 'start' ? 'ปรับมุมเริ่มต้น' : 'ปรับมุมสิ้นสุด');
+
+    let move: ((e: TouchEvent) => void) | null = null;
+    let end: ((e: TouchEvent) => void) | null = null;
+
+    const detach = (): void => {
+      if (move) doc.removeEventListener('touchmove', move);
+      if (end) {
+        doc.removeEventListener('touchend', end);
+        doc.removeEventListener('touchcancel', end);
+      }
+      move = null;
+      end = null;
+    };
+
     // touchstart ไม่ใช่ click — ต้องจับให้ได้ตั้งแต่นิ้วแตะ ไม่ใช่ตอนปล่อย
     // preventDefault กันเบราว์เซอร์สังเคราะห์ mouse event ตามหลังซึ่งจะไปถึง xterm
     handle.addEventListener('touchstart', event => {
       event.preventDefault();
       deps.onGrab(corner);
+
+      move = (e: TouchEvent) => {
+        e.preventDefault();   // กันเบราว์เซอร์เลื่อนหน้าเว็บระหว่างลากหมุด
+        const touch = e.changedTouches[0];
+        if (touch) deps.onDragMove(touch.clientX, touch.clientY);
+      };
+      end = (e: TouchEvent) => {
+        e.preventDefault();
+        const touch = e.changedTouches[0];
+        detach();
+        if (touch) deps.onDragEnd(touch.clientX, touch.clientY);
+      };
+      doc.addEventListener('touchmove', move, { passive: false });
+      doc.addEventListener('touchend', end, { passive: false });
+      doc.addEventListener('touchcancel', end, { passive: false });
     }, { passive: false });
     return handle;
   };

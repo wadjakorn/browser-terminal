@@ -15,7 +15,7 @@ import {
 import { fitAndSendResize } from './terminal-resize.js';
 import { createTextSelection, selectionMouseInit, type TerminalPort } from './text-selection.js';
 import { createSelectionSheet } from './selection-sheet.js';
-import { createSelectionHandles, CONFIRM_BAR_HEIGHT_PX } from './selection-handles.js';
+import { createSelectionHandles, CONFIRM_BAR_HEIGHT_PX, type PlacementLimits } from './selection-handles.js';
 import { createClipboard } from './clipboard.js';
 import { loadSelectionPrefs } from './selection-prefs.js';
 import { createFullscreenController } from './fullscreen.js';
@@ -86,6 +86,14 @@ function backToLogin(): void {
 /** ตั้งค่าใน initTerminal และใช้ต่อใน bindTouch ซึ่งถูกเรียกหลังจากนั้น */
 let linkOpener: LinkOpener | null = null;
 let linkPort: TerminalPort | null = null;
+
+/**
+ * ตั้งค่าจริงใน initTerminal — ต้องอยู่ที่ module scope เพราะ bindTouch เป็นฟังก์ชัน
+ * แยกที่เรียกทีหลัง closure ของ initTerminal จึงมองไม่เห็นกัน touchend ใน bindTouch
+ * ต้องเรียกตัวนี้หลัง pointerUp ทุกครั้ง ไม่งั้นทางเดียวที่ overlay จะโผล่คือรอ
+ * PTY output มายิง t.onScroll โดยบังเอิญ
+ */
+let syncHandles: () => void = () => {};
 
 function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar } {
   const t = new Terminal({
@@ -241,6 +249,10 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       }
       prevVisible = nextVisible;
       syncKeyboardButton();
+      // overlay ตรึงตำแหน่งด้วย viewport coordinates — IME โผล่/หุบไม่เปลี่ยนจำนวนแถว
+      // จึงไม่ผ่าน t.onResize เลย ต้องอาศัย visualViewport ตัวเดียวกับที่ใช้ตัดสิน
+      // สถานะคีย์บอร์ดข้างบนนี้แหละมาซิงก์ตำแหน่งหมุด/แถบยืนยันด้วย
+      syncHandles();
     });
   }
 
@@ -257,7 +269,13 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   $('app').append(sheet.element);
 
   const handles = createSelectionHandles({
-    onGrab: corner => selection?.beginHandleDrag(corner),
+    // ต้อง sync ทันทีที่จับหมุด ไม่งั้น overlay จะยังวาด rect ก่อนจับค้างอยู่จนกว่า
+    // เหตุการณ์ถัดไปจะมาสะกิด — ผู้ใช้เห็นหมุดค้างที่จุดเดิมทั้งที่กำลังลากอยู่แล้ว
+    onGrab: corner => { selection?.beginHandleDrag(corner); syncHandles(); },
+    // ปลายทางของ touchmove/touchend ที่ selection-handles.ts ผูกเองระหว่างลากหมุด —
+    // bindTouch ใน main.ts มองไม่เห็นอีเวนต์พวกนี้เพราะ target ไม่ใช่ #terminal
+    onDragMove: (x, y) => selection?.pointerMove(x, y),
+    onDragEnd: (x, y) => { selection?.pointerUp(x, y); syncHandles(); },
     onConfirm: () => selection?.confirm(),
     onCancel: () => selection?.cancel(),
   });
@@ -267,7 +285,7 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
    * ขอบล่างที่ใช้ได้คือ top ของแถบปุ่ม ไม่ใช่ขอบ viewport — แถบปุ่มกินพื้นที่ล่างจอ
    * อยู่ตลอด และความสูงของมันเปลี่ยนได้ตอนกางหน้า settings จึงต้องอ่านสดทุกครั้ง
    */
-  const placementLimits = () => {
+  const placementLimits = (): PlacementLimits => {
     const bar = $('keybar').getBoundingClientRect();
     return { viewportHeight: window.innerHeight, bottomLimit: bar.top, barHeight: CONFIRM_BAR_HEIGHT_PX };
   };
@@ -276,7 +294,7 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
    * overlay โผล่เฉพาะสถานะ adjusting — ระหว่างลากไม่ต้องมีหมุดให้รก และ onBlockChange
    * ที่ยิงถี่ระหว่างลากจะไม่ทำให้ overlay กะพริบ
    */
-  const syncHandles = (): void => {
+  syncHandles = (): void => {
     if (!selection || selection.state() !== 'adjusting') {
       handles.place(null, placementLimits());
       return;
@@ -312,7 +330,7 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       syncHandles();
       keybar.refresh();
     },
-    onBlockChange: block => {
+    onBlockChange: () => {
       handles.setCopyEnabled(selection?.blockHasText() === true);
       syncHandles();
     },
@@ -610,6 +628,10 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     if ((selection?.active() ?? false) && e.touches.length === 0 && e.changedTouches.length > 0) {
       const touch = firstTouch(e);
       selection!.pointerUp(touch.clientX, touch.clientY);
+      // finish() ใน text-selection.ts ตั้ง block ก่อนเปลี่ยน phase เป็น 'adjusting'
+      // onBlockChange จึง sync ตอนที่ state() ยังเป็น 'dragging' อยู่ ต้อง sync ซ้ำที่นี่
+      // ไม่งั้นหมุดจะไม่โผล่จนกว่าจะมี PTY output มายิง t.onScroll โดยบังเอิญ
+      syncHandles();
       return;
     }
     recognizer.onTouchEnd(points(e));

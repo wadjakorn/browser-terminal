@@ -28,12 +28,12 @@ describe('keybar preferences', () => {
   it('starts from the legacy quick-row defaults', () => {
     expect(defaultKeybarPreferences()).toEqual({
       version: 1,
-      order: expect.arrayContaining(['esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'shift-tab', 'shift', 'alt', 'interrupt', 'select', 'paste', 'pipe', 'tilde', 'slash', 'dash', 'page-up', 'delete', 'f12', 'ctrl-z']),
+      order: expect.arrayContaining(['esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'shift-tab', 'shift', 'alt', 'interrupt', 'enter', 'select', 'paste', 'pipe', 'tilde', 'slash', 'dash', 'page-up', 'delete', 'f12', 'ctrl-z']),
       hidden: expect.arrayContaining(['page-up', 'delete', 'f12', 'ctrl-z']),
     });
-    expect(visibleKeyIds(defaultKeybarPreferences()).slice(0, 19)).toEqual([
+    expect(visibleKeyIds(defaultKeybarPreferences()).slice(0, 20)).toEqual([
       'esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
-      'shift-tab', 'shift', 'alt', 'interrupt', 'select', 'paste', 'settings', 'fullscreen',
+      'shift-tab', 'shift', 'alt', 'interrupt', 'enter', 'select', 'paste', 'settings', 'fullscreen',
       'pipe', 'tilde', 'slash', 'dash',
     ]);
   });
@@ -41,7 +41,7 @@ describe('keybar preferences', () => {
   it('adds the expanded settings and fullscreen tools to the sortable order', () => {
     const preferences = defaultKeybarPreferences();
 
-    expect(preferences.order.slice(13, 19)).toEqual([
+    expect(preferences.order.slice(14, 20)).toEqual([
       'settings', 'fullscreen', 'pipe', 'tilde', 'slash', 'dash',
     ]);
     expect(visibleKeyIds(preferences)).toEqual(expect.arrayContaining(['settings', 'fullscreen']));
@@ -65,9 +65,17 @@ describe('keybar preferences', () => {
     const legacy = ALL_KEY_IDS.filter(id => id !== 'select' && id !== 'paste');
     const normalized = normalizeKeybarPreferences({ version: 1, order: [...legacy], hidden: [] });
 
-    expect(normalized.order.indexOf('select')).toBe(normalized.order.indexOf('interrupt') + 1);
+    expect(normalized.order.indexOf('select')).toBe(normalized.order.indexOf('interrupt') + 2);
     expect(normalized.order.indexOf('paste')).toBe(normalized.order.indexOf('select') + 1);
     expect(normalized.order.indexOf('paste')).toBeLessThan(normalized.order.indexOf('pipe'));
+  });
+
+  it('prefs ที่บันทึกก่อนมีปุ่ม Enter ได้ปุ่มนั้นมาอยู่ในกลุ่มเปิด ต่อจาก interrupt', () => {
+    const legacy = { version: 1, order: ['esc', 'tab', 'interrupt', 'select'], hidden: [] };
+    const result = normalizeKeybarPreferences(legacy);
+    expect(result.hidden).not.toContain('enter');
+    expect(result.order.indexOf('enter')).toBeGreaterThan(result.order.indexOf('interrupt'));
+    expect(result.order.indexOf('enter')).toBeLessThan(result.order.indexOf('select'));
   });
 
   it('ลำดับที่ผู้ใช้จัดเองไม่ถูกรื้อ แทรกเฉพาะ id ใหม่', () => {

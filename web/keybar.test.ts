@@ -24,7 +24,7 @@ describe('shared key inventory', () => {
     const labels = KEYS.map(key => key.label);
     expect(labels).toEqual([
       'Esc', 'Tab', 'Ctrl', '↑', '↓', '←', '→', 'Shift Tab', 'Shift',
-      'Alt', '^C', '⧉', '⎘', '|', '~', '/', '-',
+      'Alt', '^C', '⏎', '⧉', '⎘', '|', '~', '/', '-',
     ]);
     expect(new Set(labels).size).toBe(labels.length);
     expect(labels).not.toContain('⇄');
@@ -147,7 +147,7 @@ describe('keybar customization state', () => {
     expect(keybarSurfaceIds(preferences, false)).not.toEqual(
       expect.arrayContaining(['settings', 'fullscreen']),
     );
-    expect(keybarSurfaceIds(preferences, true).slice(13, 15)).toEqual([
+    expect(keybarSurfaceIds(preferences, true).slice(14, 16)).toEqual([
       'fullscreen', 'settings',
     ]);
   });

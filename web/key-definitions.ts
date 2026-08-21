@@ -87,6 +87,9 @@ export const KEY_CATALOG: readonly KeySpec[] = [
   { id: 'shift', label: 'Shift', title: 'Shift modifier', category: 'core', key: { kind: 'modifier', name: 'shift' }, defaultVisible: true, defaultOrder: 90 },
   { id: 'alt', label: 'Alt', title: 'Alt modifier', category: 'core', key: { kind: 'modifier', name: 'alt' }, defaultVisible: true, defaultOrder: 100 },
   { id: 'interrupt', label: '^C', title: 'Interrupt — send Ctrl+C', category: 'core', key: { kind: 'interrupt' }, defaultVisible: true, defaultOrder: 110 },
+  // `\r` ไม่ใช่ `\n` — PTY ในโหมด canonical แปลง CR เป็น newline ให้เอง ส่วน `\n`
+  // ตรงๆ จะกลายเป็น line feed ที่เลื่อนบรรทัดแต่ไม่ submit คำสั่ง
+  { id: 'enter', label: '⏎', title: 'Enter', category: 'core', key: { kind: 'literal', data: '\r' }, defaultVisible: true, defaultOrder: 112 },
   {
     id: 'select', label: '⧉', title: 'Select text — highlight and copy', category: 'core',
     action: 'select-mode', toggle: true, defaultVisible: true, defaultOrder: 115,

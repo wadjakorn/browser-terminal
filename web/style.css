@@ -277,6 +277,12 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
   border-radius: .45rem;
 }
 
+/* ปุ่มที่กดไม่ได้แต่หน้าตาเหมือนเดิมอ่านว่า "พัง" ไม่ใช่ "สุดทางแล้ว" */
+.keybar-mini-btn:disabled {
+  opacity: .3;
+  cursor: default;
+}
+
 .keybar-reset-btn {
   justify-self: start;
   min-width: 5.5rem;

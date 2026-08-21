@@ -316,7 +316,26 @@ export function mountKeybar(container: HTMLElement, handlers: {
     title.textContent = 'Customize keys';
     panel.append(title);
 
-    for (const spec of orderedCatalog()) {
+    const specs = orderedCatalog();
+    const visibleCount = specs.filter(spec => !hidden.has(spec.id)).length;
+    let hiddenHeadingShown = false;
+
+    specs.forEach((spec, index) => {
+      const inHiddenGroup = hidden.has(spec.id);
+
+      // เส้นแบ่งกลุ่มต้องมองเห็นได้ ไม่ใช่กฎเงียบๆ ที่ผู้ใช้ต้องอนุมานเอาเองจากการที่
+      // ปุ่มลูกศรบางตัวกดไม่ลง
+      if (inHiddenGroup && !hiddenHeadingShown) {
+        const heading = document.createElement('div');
+        heading.className = 'keybar-customize-title';
+        heading.textContent = 'ซ่อนอยู่';
+        panel.append(heading);
+        hiddenHeadingShown = true;
+      }
+
+      const groupStart = inHiddenGroup ? visibleCount : 0;
+      const groupEnd = inHiddenGroup ? specs.length - 1 : visibleCount - 1;
+
       const row = document.createElement('div');
       row.className = 'keybar-customize-row';
       row.dataset.category = spec.category;
@@ -337,16 +356,20 @@ export function mountKeybar(container: HTMLElement, handlers: {
       label.textContent = `${spec.label} · ${spec.title}`;
       name.append(checkbox, label);
 
-      const previous = makeMiniButton('←', `Move ${spec.label} earlier`, () => {
+      // ↑/↓ ไม่ใช่ ←/→ — ลิสต์นี้เรียงแนวตั้ง ทิศที่แถวขยับจริงคือขึ้นกับลง
+      const previous = makeMiniButton('↑', `Move ${spec.label} up`, () => {
         applyPreferences(moveKey(preferences, spec.id, -1));
       });
-      const next = makeMiniButton('→', `Move ${spec.label} later`, () => {
+      previous.disabled = index === groupStart;
+
+      const next = makeMiniButton('↓', `Move ${spec.label} down`, () => {
         applyPreferences(moveKey(preferences, spec.id, 1));
       });
+      next.disabled = index === groupEnd;
 
       row.append(name, previous, next);
       panel.append(row);
-    }
+    });
 
     const reset = makeButton('Reset', () => {
       applyPreferences(resetKeybarPreferences());

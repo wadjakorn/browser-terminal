@@ -426,6 +426,7 @@ git commit -m "feat: group settings list by visibility with vertical move button
 **Interfaces:**
 - Consumes: `blockFrom`, `clampColumn`, `extractText` จาก `./selection-region.js`; `nearestPane` จาก `./pane-detect.js` (ทั้งหมดมีอยู่แล้ว ไม่แก้)
 - Produces — Task 5, 6, 7 พึ่งพาทั้งหมดนี้:
+  - `blockHasText(): boolean`
   - `SelectionState = 'off' | 'idle' | 'dragging' | 'adjusting' | 'grabbing'`
   - `state(): SelectionState`
   - `currentBlock(): Block | null`
@@ -436,130 +437,137 @@ git commit -m "feat: group settings list by visibility with vertical move button
 
 - [ ] **Step 1: เขียนเทสที่ต้องแดง**
 
-เพิ่มใน `web/text-selection.test.ts` (ใช้ helper สร้าง fake `TerminalPort` ที่ไฟล์นั้นมีอยู่แล้ว — ถ้าชื่อไม่ตรง ให้ใช้ชื่อจริงในไฟล์):
+ไฟล์ `web/text-selection.test.ts` มี helper อยู่แล้ว: `build(opts)` คืน `{ selection, port,
+dispatched, clearSelection, onRegionPicked, onModeChange }`, `at(column, row)` แปลงเซลล์เป็น
+พิกัดพิกเซลเป็น tuple ที่ spread เข้า `pointerDown/Move/Up` ได้, และ `SCREEN` คือจอจำลอง 6 แถว
+ที่มีเส้นแบ่ง pane `│` อยู่คอลัมน์ 10 (`viewportTop()` คืน 100 เสมอ)
+
+`build()` ยังไม่รับ `onBlockChange` ต้องเพิ่มให้มันส่งต่อไปด้วย:
 
 ```ts
-  it('ปล่อยนิ้วจบการลากแล้วเข้าโหมดปรับ ไม่เปิดแผ่นผลลัพธ์', () => {
-    const picked = vi.fn();
-    const blocks: unknown[] = [];
-    const s = createTextSelection({ ...baseDeps(), onRegionPicked: picked, onBlockChange: b => blocks.push(b) });
-    s.toggle();
-    s.pointerDown(10, 10);
-    s.pointerMove(60, 30);
-    s.pointerUp(60, 30);
-    expect(picked).not.toHaveBeenCalled();
-    expect(s.state()).toBe('adjusting');
-    expect(s.currentBlock()).not.toBeNull();
-    expect(blocks.at(-1)).toEqual(s.currentBlock());
+interface FakeOpts {
+  screen?: string[];
+  viewportTop?: () => number;
+  cellWidth?: number;
+  prefs?: SelectionPrefs;
+  onBlockChange?: (block: unknown) => void;
+}
+```
+
+และใน `build()` ส่ง `onBlockChange: opts.onBlockChange` เข้า `createTextSelection`
+
+เพิ่มเทสใน `describe('โหมดเลือก', ...)`:
+
+```ts
+  it('ปล่อยนิ้วจบการลากแล้วเข้าโหมดปรับ ไม่ส่งข้อความออกไป', () => {
+    const seen: unknown[] = [];
+    const { selection, onRegionPicked } = build({ onBlockChange: b => seen.push(b) });
+    selection.toggle();
+    selection.pointerDown(...at(12, 1));
+    selection.pointerUp(...at(20, 3));
+    expect(onRegionPicked).not.toHaveBeenCalled();
+    expect(selection.state()).toBe('adjusting');
+    expect(selection.currentBlock()).toEqual({ topLine: 101, bottomLine: 103, startColumn: 12, endColumn: 20 });
+    expect(seen.at(-1)).toEqual(selection.currentBlock());
   });
 
   it('ลากหมุด start เปลี่ยนเฉพาะมุมบนซ้าย', () => {
-    const s = createTextSelection(baseDeps());
-    s.toggle();
-    s.pointerDown(30, 30);
-    s.pointerMove(80, 60);
-    s.pointerUp(80, 60);
-    const before = s.currentBlock()!;
-    s.beginHandleDrag('start');
-    s.pointerMove(10, 10);
-    s.pointerUp(10, 10);
-    const after = s.currentBlock()!;
-    expect(after.bottomLine).toBe(before.bottomLine);
-    expect(after.endColumn).toBe(before.endColumn);
-    expect(after.topLine).toBeLessThan(before.topLine);
+    const { selection } = build();
+    selection.toggle();
+    selection.pointerDown(...at(14, 2));
+    selection.pointerUp(...at(20, 4));
+    selection.beginHandleDrag('start');
+    selection.pointerMove(...at(12, 1));
+    selection.pointerUp(...at(12, 1));
+    expect(selection.currentBlock()).toEqual({ topLine: 101, bottomLine: 104, startColumn: 12, endColumn: 20 });
   });
 
   it('ลากหมุด end เปลี่ยนเฉพาะมุมล่างขวา', () => {
-    const s = createTextSelection(baseDeps());
-    s.toggle();
-    s.pointerDown(30, 30);
-    s.pointerMove(80, 60);
-    s.pointerUp(80, 60);
-    const before = s.currentBlock()!;
-    s.beginHandleDrag('end');
-    s.pointerMove(140, 90);
-    s.pointerUp(140, 90);
-    const after = s.currentBlock()!;
-    expect(after.topLine).toBe(before.topLine);
-    expect(after.startColumn).toBe(before.startColumn);
-    expect(after.bottomLine).toBeGreaterThan(before.bottomLine);
+    const { selection } = build();
+    selection.toggle();
+    selection.pointerDown(...at(14, 2));
+    selection.pointerUp(...at(20, 4));
+    selection.beginHandleDrag('end');
+    selection.pointerMove(...at(24, 5));
+    selection.pointerUp(...at(24, 5));
+    expect(selection.currentBlock()).toEqual({ topLine: 102, bottomLine: 105, startColumn: 14, endColumn: 24 });
   });
 
-  it('ลากหมุดข้ามอีกมุมไป กรอบพลิกได้ถูกต้อง', () => {
-    const s = createTextSelection(baseDeps());
-    s.toggle();
-    s.pointerDown(30, 30);
-    s.pointerMove(80, 60);
-    s.pointerUp(80, 60);
-    s.beginHandleDrag('start');
-    s.pointerMove(200, 200);
-    s.pointerUp(200, 200);
-    const block = s.currentBlock()!;
+  it('ลากหมุดข้ามอีกมุมไป กรอบพลิกโดยไม่ค้าง', () => {
+    const { selection } = build();
+    selection.toggle();
+    selection.pointerDown(...at(14, 2));
+    selection.pointerUp(...at(20, 4));
+    selection.beginHandleDrag('start');
+    selection.pointerMove(...at(26, 5));
+    selection.pointerUp(...at(26, 5));
+    const block = selection.currentBlock()!;
     expect(block.topLine).toBeLessThanOrEqual(block.bottomLine);
     expect(block.startColumn).toBeLessThanOrEqual(block.endColumn);
+    expect(block).toEqual({ topLine: 104, bottomLine: 105, startColumn: 20, endColumn: 26 });
   });
 
   it('แตะที่ terminal ขณะปรับ = เริ่มกรอบใหม่ ทิ้งกรอบเดิม', () => {
-    const s = createTextSelection(baseDeps());
-    s.toggle();
-    s.pointerDown(30, 30);
-    s.pointerMove(80, 60);
-    s.pointerUp(80, 60);
-    const before = s.currentBlock()!;
-    s.pointerDown(200, 200);
-    s.pointerUp(200, 200);
-    expect(s.currentBlock()).not.toEqual(before);
+    const { selection } = build();
+    selection.toggle();
+    selection.pointerDown(...at(14, 2));
+    selection.pointerUp(...at(20, 4));
+    selection.pointerDown(...at(22, 0));
+    selection.pointerUp(...at(24, 1));
+    expect(selection.currentBlock()).toEqual({ topLine: 100, bottomLine: 101, startColumn: 22, endColumn: 24 });
   });
 
   it('confirm ส่งข้อความออกไปแต่ยังอยู่ในโหมด', () => {
-    const picked = vi.fn();
-    const s = createTextSelection({ ...baseDeps(), onRegionPicked: picked });
-    s.toggle();
-    s.pointerDown(10, 10);
-    s.pointerMove(60, 30);
-    s.pointerUp(60, 30);
-    s.confirm();
-    expect(picked).toHaveBeenCalledTimes(1);
-    expect(s.active()).toBe(true);
+    const { selection, onRegionPicked } = build();
+    selection.toggle();
+    selection.pointerDown(...at(12, 1));
+    selection.pointerUp(...at(20, 2));
+    selection.confirm();
+    expect(onRegionPicked).toHaveBeenCalledTimes(1);
+    expect(onRegionPicked.mock.calls[0]![0]).toContain('left row');
+    expect(selection.active()).toBe(true);
+    expect(selection.state()).toBe('adjusting');
   });
 
-  it('กรอบที่ดึงข้อความไม่ได้ยังอยู่ให้ปรับต่อ', () => {
-    const s = createTextSelection(emptyTextDeps());
-    s.toggle();
-    s.pointerDown(10, 10);
-    s.pointerMove(60, 30);
-    s.pointerUp(60, 30);
-    expect(s.state()).toBe('adjusting');
-    expect(s.currentBlock()).not.toBeNull();
+  it('กรอบที่คลุมแต่ช่องว่างยังอยู่ให้ปรับต่อ ไม่ถูกล้างทิ้ง', () => {
+    const { selection, clearSelection } = build({ screen: ['          │              ', '          │              '] });
+    selection.toggle();
+    selection.pointerDown(...at(12, 0));
+    selection.pointerUp(...at(18, 1));
+    expect(selection.state()).toBe('adjusting');
+    expect(selection.currentBlock()).not.toBeNull();
+    expect(selection.blockHasText()).toBe(false);
+    expect(clearSelection).not.toHaveBeenCalled();
   });
 
-  it('blockRect คืน null เมื่อไม่มีกรอบ และไม่ clamp ให้อยู่ในจอ', () => {
-    const s = createTextSelection(baseDeps());
-    expect(s.blockRect()).toBeNull();
-    s.toggle();
-    s.pointerDown(10, 10);
-    s.pointerMove(60, 30);
-    s.pointerUp(60, 30);
-    const rect = s.blockRect()!;
-    expect(rect.right).toBeGreaterThan(rect.left);
-    expect(rect.bottom).toBeGreaterThan(rect.top);
+  it('blockRect คืน null เมื่อไม่มีกรอบ และครอบเซลล์เต็มใบทั้งสองมุม', () => {
+    const { selection } = build();
+    expect(selection.blockRect()).toBeNull();
+    selection.toggle();
+    selection.pointerDown(...at(12, 1));
+    selection.pointerUp(...at(20, 3));
+    // at() คืนจุดกลางเซลล์ ขอบกรอบจึงห่างจากจุดนั้นครึ่งเซลล์ทั้งสองด้าน
+    expect(selection.blockRect()).toEqual({
+      left: LEFT + 12 * CELL_W,
+      top: TOP + 1 * CELL_H,
+      right: LEFT + 21 * CELL_W,
+      bottom: TOP + 4 * CELL_H,
+    });
   });
 
   it('การลากหมุดยังตรึงคอลัมน์ไว้ใน pane เดิม', () => {
-    const s = createTextSelection(pipedPaneDeps());
-    s.toggle();
-    s.pointerDown(10, 10);
-    s.pointerMove(40, 30);
-    s.pointerUp(40, 30);
-    s.beginHandleDrag('end');
-    s.pointerMove(9999, 30);
-    s.pointerUp(9999, 30);
-    const pane = s.activePanes().find(p => p.start <= s.currentBlock()!.startColumn)!;
-    expect(s.currentBlock()!.endColumn).toBeLessThanOrEqual(pane.end);
+    const { selection } = build();
+    selection.toggle();
+    selection.pointerDown(...at(2, 1));   // ใน sidebar ซ้ายของเส้นแบ่งที่คอลัมน์ 10
+    selection.pointerUp(...at(6, 2));
+    selection.beginHandleDrag('end');
+    selection.pointerMove(...at(25, 3));  // ลากข้ามเส้นแบ่งไปฝั่งขวา
+    selection.pointerUp(...at(25, 3));
+    expect(selection.currentBlock()!.endColumn).toBeLessThan(10);
   });
 ```
 
-`baseDeps()`, `emptyTextDeps()`, `pipedPaneDeps()` คือ helper ที่ต้องเขียนในไฟล์เทส โดยล้อจาก fake port ที่มีอยู่แล้วในไฟล์นั้น — `emptyTextDeps` คือ port ที่ `readLine` คืนสตริงว่างเสมอ `pipedPaneDeps` คือ port ที่มีอักขระ `│` อยู่คอลัมน์กลางทุกแถว
+`LEFT` และ `CELL_W` / `CELL_H` เป็นค่าคงที่ระดับโมดูลในไฟล์เทสอยู่แล้ว ไม่ต้องประกาศใหม่
 
 - [ ] **Step 2: รันเทสให้เห็นว่าแดง**
 
@@ -1193,6 +1201,9 @@ git commit -m "feat: wire adjustable selection handles into the terminal view"
 | ผูก onScroll / resize | 7 (Step 3) |
 | อัปเดตเอกสาร | 7 (Step 7) |
 
-**Placeholder scan:** ไม่มี TBD/TODO ทุก step ที่แก้โค้ดมี code block จริง ข้อยกเว้นที่ตั้งใจคือ helper `baseDeps()` / `emptyTextDeps()` / `pipedPaneDeps()` ใน Task 4 Step 1 ซึ่งต้องล้อจาก fake port ที่มีอยู่แล้วในไฟล์เทสนั้น — เขียนตายตัวไว้ในแผนไม่ได้เพราะยังไม่รู้ชื่อ helper จริงในไฟล์
+**Placeholder scan:** ไม่มี TBD/TODO ทุก step ที่แก้โค้ดมี code block จริง เทสใน Task 4
+ใช้ helper `build()` / `at()` / `SCREEN` ที่มีอยู่จริงใน `web/text-selection.test.ts` และค่าที่
+assert เป็นตัวเลขจริงที่คำนวณจาก `viewportTop() = 100`, `CELL_W = 10`, `CELL_H = 20`, `LEFT = 37`,
+`TOP = 11` ไม่ใช่ตัวยึด — ถ้ารันแล้วตัวเลขไม่ตรง ให้เชื่อค่าที่รันได้จริงและแก้เทส
 
 **Type consistency:** `Rect` / `PlacementLimits` นิยามใน Task 5 ใช้ชื่อเดียวกันใน Task 6 และ 7 `'start' | 'end'` เป็นชื่อมุมเดียวกันทั้ง Task 4, 5, 6, 7 `blockRect()` คืน shape เดียวกับ `Rect` `state()` คืน `SelectionState` ที่ Task 7 เทียบกับ `'adjusting'` ตรงกัน

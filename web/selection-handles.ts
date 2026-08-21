@@ -39,6 +39,12 @@ export function handleAnchors(rect: Rect): { start: { x: number; y: number }; en
  * นอกจากไปกดปุ่ม ⧉ บนแถบปุ่มซึ่งอาจถูกนิ้วบังอยู่
  */
 export function confirmBarPlacement(rect: Rect, limits: PlacementLimits): { side: 'above' | 'below' | 'over'; top: number } {
+  /**
+   * ตัวแปรสองตัว `top >= 0` และ `top + barHeight <= bottomLimit` อาจขัดแย้ง
+   * เมื่อ viewport สั้นกว่าแถบยืนยัน (bottomLimit - barHeight < 0)
+   * ในกรณีนี้ `top >= 0` ชนะ — แถบบนจอแม้จะทับแถบปุ่มก็ดีกว่า
+   * แถบหลุดจอจะหลุดจากโหมดเลือกไม่ได้เลย และนิ้วอาจบังปุ่ม ⧉ บนแถบปุ่ม
+   */
   const clamp = (value: number): number =>
     Math.max(0, Math.min(value, limits.bottomLimit - limits.barHeight));
 

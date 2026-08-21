@@ -49,4 +49,23 @@ describe('การวาง overlay ของโหมดเลือก', () =
     expect(handleVisibility({ left: 0, top: 10, right: 100, bottom: 200 }, 800))
       .toEqual({ start: true, end: true });
   });
+
+  it('viewport สั้นกว่าแถบ → top = 0 เสมอ', () => {
+    const shortLimits = { viewportHeight: 100, bottomLimit: 40, barHeight: 48 };
+    const placement = confirmBarPlacement({ left: 0, top: 10, right: 100, bottom: 35 }, shortLimits);
+    expect(placement.top).toBe(0);
+    expect(placement.top).toBeGreaterThanOrEqual(0);
+    expect(placement.top + shortLimits.barHeight).toBeGreaterThanOrEqual(0);
+  });
+
+  it("'over' ด้วยกรอบสูง: ตัวเลข top ได้รับการทดสอบและคำนึงถึงขอบเขตจริง", () => {
+    // กรอบสูงที่บังคับให้ใช้ 'over': top ใกล้ 0 (ไม่พอเหนือ) bottom ใกล้ bottomLimit (ไม่พอล่าง)
+    const placement = confirmBarPlacement({ left: 0, top: 5, right: 100, bottom: 685 }, limits);
+    expect(placement.side).toBe('over');
+    // middle = (5 + 685) / 2 - 48 / 2 = 345 - 24 = 321
+    expect(placement.top).toBe(321);
+    // ตรวจสอบว่าไม่ล้ำเข้าแถบปุ่มแม้ว่าเป็น 'over'
+    expect(placement.top).toBeGreaterThanOrEqual(0);
+    expect(placement.top + limits.barHeight).toBeLessThanOrEqual(limits.bottomLimit);
+  });
 });

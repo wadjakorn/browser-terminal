@@ -181,11 +181,27 @@ export function mountKeybar(container: HTMLElement, handlers: {
     return button;
   };
 
-  const makeMiniButton = (label: string, title: string, onClick: () => void): HTMLButtonElement => {
-    const button = makeButton(label, onClick);
+  /**
+   * ปุ่มย้ายลำดับใช้ chevron ตัวเดียวกับปุ่มลูกศรบนแถบ ไม่ใช่อักขระ ↑/↓
+   *
+   * ปุ่มลูกศรไม่ได้วาดด้วยตัวอักษร แต่ประกอบจาก border สองด้านแล้วหมุนเอา
+   * (ดู .keybar-btn-arrow ใน style.css) เพราะกลิฟลูกศรของแต่ละแพลตฟอร์มหนาบางไม่เท่ากัน
+   * และบางเครื่องเรนเดอร์เป็น emoji สีทับสีปุ่ม ถ้าปุ่มย้ายลำดับใช้ตัวอักษรต่อไป
+   * ผู้ใช้จะเห็นลูกศรสองแบบในหน้าจอเดียวกันโดยที่ทั้งคู่หมายถึงทิศเดียวกัน
+   */
+  const makeMoveButton = (move: 'up' | 'down', title: string, onClick: () => void): HTMLButtonElement => {
+    const button = makeButton('', onClick);
     button.classList.add('keybar-mini-btn');
+    button.dataset.move = move;
     button.title = title;
     button.setAttribute('aria-label', title);
+
+    // ทิศทางสื่อผ่าน aria-label อยู่แล้ว รูปทรงจึงเป็นของตกแต่งล้วน
+    const chevron = document.createElement('span');
+    chevron.className = 'keybar-btn-label';
+    chevron.setAttribute('aria-hidden', 'true');
+    button.replaceChildren(chevron);
+
     return button;
   };
 
@@ -356,13 +372,13 @@ export function mountKeybar(container: HTMLElement, handlers: {
       label.textContent = `${spec.label} · ${spec.title}`;
       name.append(checkbox, label);
 
-      // ↑/↓ ไม่ใช่ ←/→ — ลิสต์นี้เรียงแนวตั้ง ทิศที่แถวขยับจริงคือขึ้นกับลง
-      const previous = makeMiniButton('↑', `Move ${spec.label} up`, () => {
+      // ขึ้น/ลง ไม่ใช่ ซ้าย/ขวา — ลิสต์นี้เรียงแนวตั้ง ทิศที่แถวขยับจริงคือขึ้นกับลง
+      const previous = makeMoveButton('up', `Move ${spec.label} up`, () => {
         applyPreferences(moveKey(preferences, spec.id, -1));
       });
       previous.disabled = index === groupStart;
 
-      const next = makeMiniButton('↓', `Move ${spec.label} down`, () => {
+      const next = makeMoveButton('down', `Move ${spec.label} down`, () => {
         applyPreferences(moveKey(preferences, spec.id, 1));
       });
       next.disabled = index === groupEnd;

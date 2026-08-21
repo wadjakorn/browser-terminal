@@ -184,7 +184,14 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
   -webkit-touch-callout: none;
 }
 
-.keybar-btn-arrow .keybar-btn-label {
+/*
+ * รูปทรง chevron — ใช้ร่วมกันระหว่างปุ่มลูกศรบนแถบกับปุ่มย้ายลำดับในหน้า settings
+ *
+ * วาดจาก border สองด้านแทนกลิฟลูกศร เพราะกลิฟของแต่ละแพลตฟอร์มหนาบางไม่เท่ากัน
+ * และบางเครื่องเรนเดอร์เป็น emoji สีทับสีปุ่ม — ทั้งสองที่ต้องได้ลูกศรหน้าตาเดียวกัน
+ */
+.keybar-btn-arrow .keybar-btn-label,
+.keybar-mini-btn[data-move] .keybar-btn-label {
   width: .82rem;
   height: .82rem;
   font-size: 0;
@@ -193,11 +200,13 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
   border-radius: .06rem;
 }
 
-.keybar-btn[data-key-id="arrow-up"] .keybar-btn-label {
+.keybar-btn[data-key-id="arrow-up"] .keybar-btn-label,
+.keybar-mini-btn[data-move="up"] .keybar-btn-label {
   transform: translateY(.12rem) rotate(-45deg);
 }
 
-.keybar-btn[data-key-id="arrow-down"] .keybar-btn-label {
+.keybar-btn[data-key-id="arrow-down"] .keybar-btn-label,
+.keybar-mini-btn[data-move="down"] .keybar-btn-label {
   transform: translateY(-.12rem) rotate(135deg);
 }
 

@@ -15,6 +15,7 @@ import {
 import { fitAndSendResize } from './terminal-resize.js';
 import { createTextSelection, selectionMouseInit, type TerminalPort } from './text-selection.js';
 import { createSelectionSheet } from './selection-sheet.js';
+import { createSelectionHandles, CONFIRM_BAR_HEIGHT_PX } from './selection-handles.js';
 import { createClipboard } from './clipboard.js';
 import { loadSelectionPrefs } from './selection-prefs.js';
 import { createFullscreenController } from './fullscreen.js';
@@ -255,6 +256,34 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   });
   $('app').append(sheet.element);
 
+  const handles = createSelectionHandles({
+    onGrab: corner => selection?.beginHandleDrag(corner),
+    onConfirm: () => selection?.confirm(),
+    onCancel: () => selection?.cancel(),
+  });
+  $('app').append(handles.element);
+
+  /**
+   * ขอบล่างที่ใช้ได้คือ top ของแถบปุ่ม ไม่ใช่ขอบ viewport — แถบปุ่มกินพื้นที่ล่างจอ
+   * อยู่ตลอด และความสูงของมันเปลี่ยนได้ตอนกางหน้า settings จึงต้องอ่านสดทุกครั้ง
+   */
+  const placementLimits = () => {
+    const bar = $('keybar').getBoundingClientRect();
+    return { viewportHeight: window.innerHeight, bottomLimit: bar.top, barHeight: CONFIRM_BAR_HEIGHT_PX };
+  };
+
+  /**
+   * overlay โผล่เฉพาะสถานะ adjusting — ระหว่างลากไม่ต้องมีหมุดให้รก และ onBlockChange
+   * ที่ยิงถี่ระหว่างลากจะไม่ทำให้ overlay กะพริบ
+   */
+  const syncHandles = (): void => {
+    if (!selection || selection.state() !== 'adjusting') {
+      handles.place(null, placementLimits());
+      return;
+    }
+    handles.place(selection.blockRect(), placementLimits());
+  };
+
   const port = createTerminalPort(t, el, t.element ?? el);
   linkPort = port;
   linkOpener = createLinkOpener({
@@ -265,7 +294,11 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   selection = createTextSelection({
     terminal: port,
     loadPrefs: columns => loadSelectionPrefs(columns),
-    onRegionPicked: text => sheet.open(text),
+    onRegionPicked: text => {
+      // ซ่อน overlay ก่อนเปิดแผ่น ไม่งั้นหมุดจะลอยทับ backdrop
+      handles.place(null, placementLimits());
+      sheet.open(text);
+    },
     onModeChange: active => {
       el.classList.toggle('selecting', active);
       if (active) {
@@ -276,12 +309,22 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       } else {
         dispatchTerminalFocus('selection-exited');
       }
+      syncHandles();
       keybar.refresh();
+    },
+    onBlockChange: block => {
+      handles.setCopyEnabled(selection?.blockHasText() === true);
+      syncHandles();
     },
     vibrate: ms => navigator.vibrate?.(ms),
   });
 
   bindTouch(t, fit);
+  // การเลื่อนนี้มาจาก output ของ PTY เท่านั้น — ในโหมดเลือก stopGestures() ถูกเรียก
+  // และนิ้วเดียวทุกครั้งถูก selectionOwnsTouch() ยึดไป ผู้ใช้เลื่อนจอเองไม่ได้
+  t.onScroll(() => syncHandles());
+  t.onResize(() => syncHandles());
+  window.addEventListener('resize', syncHandles);
   dispatchTerminalFocus('session-ready');
   syncKeyboardButton();
 

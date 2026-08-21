@@ -676,6 +676,11 @@ export type SelectionState = 'off' | 'idle' | 'dragging' | 'adjusting' | 'grabbi
       };
     },
 
+    /** กรอบที่คลุมแต่ช่องว่างดึงข้อความไม่ได้ — ปุ่มคัดลอกต้องดับ ไม่ใช่กดแล้วเงียบ */
+    blockHasText(): boolean {
+      return block !== null && extractText(block, terminal.readLine) !== '';
+    },
+
     /**
      * ไม่ออกจากโหมดตรงนี้ — setMode(false) จะเรียก clearSelection() ทำให้ไฮไลต์หายไป
      * ใต้แผ่นที่เพิ่งเปิด ทั้งที่ข้อความบนแผ่นยังหมายถึงกรอบนั้นอยู่
@@ -1116,19 +1121,11 @@ import { createSelectionHandles } from './selection-handles.js';
 - [ ] **Step 4: ให้ปุ่มคัดลอกดับเมื่อกรอบดึงข้อความไม่ได้**
 
 `onBlockChange` ใน Step 2 เปิด/ปิดตามการมีกรอบ แต่กรอบที่คลุมพื้นที่ว่างก็ยังไม่ใช่ null
-แก้เป็นการถามข้อความจริง โดยเปลี่ยนบรรทัดใน `onBlockChange`:
+แก้เป็นการถามข้อความจริงผ่าน `blockHasText()` ที่ Task 4 สร้างไว้ — เปลี่ยนบรรทัดใน
+`onBlockChange`:
 
 ```ts
-      handles.setCopyEnabled(block !== null && selection?.blockHasText() === true);
-```
-
-และเพิ่มใน `web/text-selection.ts` ภายใน object ที่ return:
-
-```ts
-    /** กรอบที่คลุมแต่ช่องว่างดึงข้อความไม่ได้ — ปุ่มคัดลอกต้องดับ ไม่ใช่กดแล้วเงียบ */
-    blockHasText(): boolean {
-      return block !== null && extractText(block, terminal.readLine) !== '';
-    },
+      handles.setCopyEnabled(selection?.blockHasText() === true);
 ```
 
 - [ ] **Step 5: รันเทสและ build**
@@ -1163,7 +1160,7 @@ Expected: PASS ทั้งหมด
 - [ ] **Step 8: Commit**
 
 ```bash
-git add web/main.ts web/text-selection.ts README.md
+git add web/main.ts README.md
 git commit -m "feat: wire adjustable selection handles into the terminal view"
 ```
 

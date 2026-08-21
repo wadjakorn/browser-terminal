@@ -121,6 +121,11 @@ export function createSelectionHandles(deps: {
     // preventDefault กันเบราว์เซอร์สังเคราะห์ mouse event ตามหลังซึ่งจะไปถึง xterm
     handle.addEventListener('touchstart', event => {
       event.preventDefault();
+      // สองนิ้วลงบนหมุดเดียวกันยิง touchstart สองรอบ — ไม่ detach ก่อนแล้วผูกซ้ำ
+      // คู่แรกจะค้างอยู่ที่ document ตลอดไปเพราะ end closure เดิมถูกตัวแปรตัวใหม่ทับ
+      // ไปแล้ว ไม่มีทางเรียก detach() ของมันได้อีก กลายเป็น touchmove ถาวรที่กลืน
+      // ทุกการแตะทั้งหน้าแม้ออกจากโหมดเลือกไปแล้ว
+      detach();
       deps.onGrab(corner);
 
       move = (e: TouchEvent) => {

@@ -68,3 +68,85 @@ export function handleVisibility(rect: Rect, viewportHeight: number): { start: b
     end: rect.bottom >= 0 && rect.bottom <= viewportHeight,
   };
 }
+
+export interface SelectionHandles {
+  element: HTMLElement;
+  /** rect เป็น null = ซ่อน overlay ทั้งอัน */
+  place(rect: Rect | null, limits: PlacementLimits): void;
+  setCopyEnabled(enabled: boolean): void;
+}
+
+export function createSelectionHandles(deps: {
+  onGrab: (corner: 'start' | 'end') => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+  document?: Document;
+}): SelectionHandles {
+  const doc = deps.document ?? document;
+
+  const root = doc.createElement('div');
+  root.className = 'sel-overlay';
+  root.hidden = true;
+
+  const makeHandle = (corner: 'start' | 'end'): HTMLElement => {
+    const handle = doc.createElement('div');
+    handle.className = `sel-handle sel-handle-${corner}`;
+    handle.setAttribute('role', 'slider');
+    handle.setAttribute('aria-label', corner === 'start' ? 'ปรับมุมเริ่มต้น' : 'ปรับมุมสิ้นสุด');
+    // touchstart ไม่ใช่ click — ต้องจับให้ได้ตั้งแต่นิ้วแตะ ไม่ใช่ตอนปล่อย
+    // preventDefault กันเบราว์เซอร์สังเคราะห์ mouse event ตามหลังซึ่งจะไปถึง xterm
+    handle.addEventListener('touchstart', event => {
+      event.preventDefault();
+      deps.onGrab(corner);
+    }, { passive: false });
+    return handle;
+  };
+
+  const start = makeHandle('start');
+  const end = makeHandle('end');
+
+  const bar = doc.createElement('div');
+  bar.className = 'sel-confirm';
+
+  const copyButton = doc.createElement('button');
+  copyButton.type = 'button';
+  copyButton.className = 'sel-btn sel-btn-copy';
+  copyButton.textContent = 'คัดลอก';
+  copyButton.addEventListener('click', () => deps.onConfirm());
+
+  const cancelButton = doc.createElement('button');
+  cancelButton.type = 'button';
+  cancelButton.className = 'sel-btn';
+  cancelButton.textContent = 'ยกเลิก';
+  cancelButton.addEventListener('click', () => deps.onCancel());
+
+  bar.append(copyButton, cancelButton);
+  root.append(start, end, bar);
+
+  return {
+    element: root,
+    setCopyEnabled(enabled: boolean): void { copyButton.disabled = !enabled; },
+    place(rect: Rect | null, limits: PlacementLimits): void {
+      if (!rect) {
+        root.hidden = true;
+        return;
+      }
+      root.hidden = false;
+
+      const anchors = handleAnchors(rect);
+      const visible = handleVisibility(rect, limits.viewportHeight);
+
+      start.hidden = !visible.start;
+      start.style.left = `${anchors.start.x}px`;
+      start.style.top = `${anchors.start.y}px`;
+
+      end.hidden = !visible.end;
+      end.style.left = `${anchors.end.x}px`;
+      end.style.top = `${anchors.end.y}px`;
+
+      const placement = confirmBarPlacement(rect, limits);
+      bar.style.top = `${placement.top}px`;
+      bar.dataset.side = placement.side;
+    },
+  };
+}

@@ -298,6 +298,59 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
+/*
+ * overlay ต้อง fixed ไม่ใช่ flex item — .app เป็น flex column ที่ความสูงถูกตรึงด้วย
+ * --visible-height ของที่ append เข้าไปเฉยๆ จะไปเบียดความสูงของ .terminal
+ * เหตุผลเดียวกับที่ .sheet ทำ z-index ต่ำกว่า .sheet (20) เพื่อให้แผ่นผลลัพธ์ทับได้
+ */
+.sel-overlay {
+  position: fixed; inset: 0; z-index: 15;
+  pointer-events: none;
+}
+
+/*
+ * touch-action: none ที่นี่จำเป็นแม้ .terminal จะตั้งไว้แล้ว — overlay อยู่นอก .terminal
+ * ไม่ได้สืบทอดมา ถ้าไม่ตั้ง เบราว์เซอร์จะกินการลากไปทำ scroll ก่อนถึง handler
+ */
+.sel-handle {
+  position: absolute;
+  width: 2.75rem; height: 2.75rem; /* 44px; keep synchronized with KEY_TARGET_PX */
+  margin: -1.375rem 0 0 -1.375rem;
+  border-radius: 50%;
+  pointer-events: auto;
+  touch-action: none;
+  background: radial-gradient(circle at center, var(--accent) 0 .4rem, transparent .45rem);
+}
+
+/*
+ * keep synchronized with CONFIRM_BAR_HEIGHT_PX (48) in selection-handles.ts:
+ * .sel-btn ใช้ border-box จึง min-height 2.5rem (40px) รวมเส้นขอบในตัว
+ * แถบนี้ไม่มีเส้นขอบของตัวเอง (ใช้ box-shadow แทนเพื่อความลึกแทน) เหลือ 8px
+ * ให้ padding บน+ล่างที่ .25rem (4px) ต่อด้าน รวมเป็น 40 + 4 + 4 = 48px พอดี
+ */
+.sel-confirm {
+  position: absolute; left: 50%;
+  transform: translateX(-50%);
+  display: flex; gap: .5rem;
+  padding: .25rem;
+  border-radius: .6rem;
+  background: #15151c;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+  pointer-events: auto;
+}
+
+.sel-confirm[data-side="over"] { opacity: .92; }
+
+.sel-btn {
+  box-sizing: border-box;
+  min-width: 5rem; min-height: 2.5rem;
+  font: inherit; color: var(--fg);
+  background: #22222c;
+  border: 1px solid #2e2e3a; border-radius: .45rem;
+}
+
+.sel-btn:disabled { opacity: .3; }
+
 .sheet {
   position: fixed; inset: 0; z-index: 20;
   display: flex; align-items: flex-end; justify-content: center;

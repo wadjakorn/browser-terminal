@@ -61,11 +61,22 @@ export function confirmBarPlacement(rect: Rect, limits: PlacementLimits): { side
  * ซ่อนเฉพาะหมุดที่หลุดจอ ไม่ใช่ทั้งกรอบ — กรอบที่ยาวกว่าหนึ่งหน้าจอเกิดได้จาก
  * output ของ PTY ที่ไหลเข้ามาระหว่างที่ผู้ใช้กำลังปรับ ยกเลิกกรอบทิ้งตอนนั้น
  * เท่ากับลบงานที่ผู้ใช้เพิ่งทำเพราะเหตุที่ไม่ใช่ความผิดเขา
+ *
+ * หมุด end ต้องเช็คกับ limits.bottomLimit ด้วย ไม่ใช่แค่ viewportHeight — แถบยืนยัน
+ * ถูก clip กับ bottomLimit (ขอบบนของแถบปุ่ม) อยู่แล้ว แต่หมุดถูก clip กับ viewportHeight
+ * เฉยๆ ทำให้หมุด end โผล่ใต้ขอบบนของแถบปุ่มได้ วงกลม 44px ที่ pointer-events: auto
+ * จึงคาบเกี่ยวแถบปุ่มและแย่งแตะแถวบนสุดของปุ่มไป
+ *
+ * clip ที่จุด anchor (rect.top/rect.bottom) ไม่ใช่ขอบวาดจริงของวงกลม — ตัวเลือกเดียวกับ
+ * ที่โค้ดเดิมใช้กับ viewportHeight อยู่แล้ว (สม่ำเสมอกว่าการคิดครึ่งขนาดหมุดเพิ่ม) และ
+ * เพราะ CSS วางหมุดด้วย negative margin ครึ่งขนาดตัวเอง "ล้ำ bottomLimit" ในที่นี้คือ
+ * anchor อยู่ในระยะครึ่งหมุดจากเส้นนั้น ไม่ใช่ล้ำไปแล้วจริงๆ — ยอมรับความคลาดเคลื่อนนี้
+ * เพื่อให้ตรรกะเรียบง่ายและเทสได้ตรงไปตรงมา
  */
-export function handleVisibility(rect: Rect, viewportHeight: number): { start: boolean; end: boolean } {
+export function handleVisibility(rect: Rect, limits: PlacementLimits): { start: boolean; end: boolean } {
   return {
-    start: rect.top >= 0 && rect.top <= viewportHeight,
-    end: rect.bottom >= 0 && rect.bottom <= viewportHeight,
+    start: rect.top >= 0 && rect.top <= limits.viewportHeight,
+    end: rect.bottom >= 0 && rect.bottom <= Math.min(limits.viewportHeight, limits.bottomLimit),
   };
 }
 
@@ -178,7 +189,7 @@ export function createSelectionHandles(deps: {
       root.hidden = false;
 
       const anchors = handleAnchors(rect);
-      const visible = handleVisibility(rect, limits.viewportHeight);
+      const visible = handleVisibility(rect, limits);
 
       start.hidden = !visible.start;
       start.style.left = `${anchors.start.x}px`;

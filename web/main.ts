@@ -189,7 +189,11 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       ),
     }),
     onPanelChange: () => {
-      requestAnimationFrame(() => sendResize());
+      // ต้อง syncHandles() ด้วย ไม่ใช่แค่ sendResize() — placementLimits() อ่าน
+      // rect ของ #keybar สด แต่ sendResize ผ่าน sendResize → fit → t.onResize
+      // ซึ่งยิงเฉพาะตอนจำนวนแถว/คอลัมน์เปลี่ยนจริง แผงตั้งค่าที่กางแค่บางส่วน
+      // ของแถวไม่ทำให้ cols/rows เปลี่ยน แถบยืนยันจะค้างทับแผงจนกว่าเหตุการณ์อื่นจะมาสะกิด
+      requestAnimationFrame(() => { sendResize(); syncHandles(); });
     },
   });
 
@@ -293,9 +297,17 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   /**
    * overlay โผล่เฉพาะสถานะ adjusting — ระหว่างลากไม่ต้องมีหมุดให้รก และ onBlockChange
    * ที่ยิงถี่ระหว่างลากจะไม่ทำให้ overlay กะพริบ
+   *
+   * ต้องเช็ค sheet.isOpen() ด้วย ไม่ใช่แค่ phase — confirm() ตั้งใจปล่อยให้
+   * phase ยังเป็น 'adjusting' ต่อไปเพื่อให้ไฮไลต์ของ xterm อยู่ใต้แผ่นผลลัพธ์
+   * แล้ว onRegionPicked ก็ซ่อน overlay เองครั้งเดียว แต่ t.onScroll (PTY
+   * output ระหว่างรันคำสั่ง แทบจะเกิดแน่นอน), t.onResize, resize ของ window,
+   * และ visualViewport resize ล้วนเรียก syncHandles() ซ้ำได้ทุกเมื่อ — ถ้าไม่กัน
+   * ตรงนี้ หมุดกับแถบยืนยันจะโผล่ทับ backdrop ของแผ่นผลลัพธ์กลับมาใหม่ ทั้งที่
+   * แตะอะไรก็ไม่ติดเพราะ backdrop ที่ z-index สูงกว่ากลืนทัชไปหมด
    */
   syncHandles = (): void => {
-    if (!selection || selection.state() !== 'adjusting') {
+    if (!selection || sheet.isOpen() || selection.state() !== 'adjusting') {
       handles.place(null, placementLimits());
       return;
     }
@@ -585,6 +597,10 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
 
   const firstTouch = (e: TouchEvent): Touch => e.changedTouches[0]!;
 
+  // จุดล่าสุดที่นิ้วอยู่ระหว่างลากเลือกข้อความ — ใช้ตอน touchcancel เท่านั้น
+  // (ระบบท่าทาง เช่น สายเรียกเข้าหรือปาดขอบจอ) ซึ่งไม่มีพิกัดของตัวเองมาให้
+  let lastSelectionPoint: { x: number; y: number } | null = null;
+
   // เมาส์จริง: xterm ส่ง mouse report ให้ herdr ใน handler ของ mousedown ของมันเอง
   // ดักในเฟส capture เพื่อกลืนอีเวนต์ก่อนถึง xterm เมื่อมีลิงก์อยู่ใต้เคอร์เซอร์
   // ให้พฤติกรรมตรงกับการแตะ: คลิกลิงก์ = เปิดลิงก์อย่างเดียว ไม่สลับ pane
@@ -598,6 +614,7 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     e.preventDefault();          // กันเบราว์เซอร์สังเคราะห์ mouse/โฟกัส/ซูมหน้าเว็บเอง
     if (selectionOwnsTouch(e)) {
       const touch = firstTouch(e);
+      lastSelectionPoint = { x: touch.clientX, y: touch.clientY };
       selection!.pointerDown(touch.clientX, touch.clientY);
       // blur เสมอ ไม่ใช่แค่ตอนที่คีย์บอร์ดปิดอยู่ก่อน — ต่างจาก tap และ dragStart
       // ที่ตั้งใจคงสถานะเดิมของผู้ใช้ไว้
@@ -617,6 +634,7 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     e.preventDefault();
     if (selectionOwnsTouch(e)) {
       const touch = firstTouch(e);
+      lastSelectionPoint = { x: touch.clientX, y: touch.clientY };
       selection!.pointerMove(touch.clientX, touch.clientY);
       return;
     }
@@ -638,7 +656,18 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     pump();                      // ปล่อยให้ momentum ไหลต่อถ้ามี
   }, { passive: false });
 
-  el.addEventListener('touchcancel', () => {
+  el.addEventListener('touchcancel', e => {
+    // ท่าทางของระบบ (สายเรียกเข้า, ปาดขอบจอ) ตัดจบการลากเลือกโดยไม่มี touchend
+    // ถ้าไม่จบให้ผ่าน pointerUp ที่นี่ phase จะค้างที่ 'dragging' พร้อม drag ที่ยังไม่
+    // null และ overlay ยังซ่อนอยู่ — ผู้ใช้เห็นไฮไลต์ของ xterm ค้างอยู่โดยไม่มีหมุดให้ปรับ
+    // เลย แล้วนิ้วถัดไปจะเริ่มกรอบใหม่ทับของเดิมที่เพิ่งลากไปทันที
+    // ใช้ lastSelectionPoint (จุดล่าสุดจาก touchstart/touchmove) เพราะ touchcancel
+    // ไม่มีพิกัดของตัวเอง — mirror ท่าเดียวกับที่ selection-handles.ts ทำกับ touchcancel
+    // ตอนลากหมุด
+    if (selectionOwnsTouch(e) && lastSelectionPoint) {
+      selection!.pointerUp(lastSelectionPoint.x, lastSelectionPoint.y);
+      syncHandles();
+    }
     recognizer.onTouchCancel();
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
   });

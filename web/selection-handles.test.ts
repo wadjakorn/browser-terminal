@@ -42,11 +42,21 @@ describe('การวาง overlay ของโหมดเลือก', () =
   });
 
   it('หมุดที่หลุดจอถูกซ่อน อีกอันในกรอบเดียวกันไม่ถูกซ่อนตาม', () => {
-    expect(handleVisibility({ left: 0, top: -40, right: 100, bottom: 200 }, 800))
+    expect(handleVisibility({ left: 0, top: -40, right: 100, bottom: 200 }, limits))
       .toEqual({ start: false, end: true });
-    expect(handleVisibility({ left: 0, top: 200, right: 100, bottom: 900 }, 800))
+    expect(handleVisibility({ left: 0, top: 200, right: 100, bottom: 900 }, limits))
       .toEqual({ start: true, end: false });
-    expect(handleVisibility({ left: 0, top: 10, right: 100, bottom: 200 }, 800))
+    expect(handleVisibility({ left: 0, top: 10, right: 100, bottom: 200 }, limits))
+      .toEqual({ start: true, end: true });
+  });
+
+  it('หมุด end ถูกซ่อนเมื่อล้ำเข้าเขตแถบปุ่ม แม้ยังอยู่ในจอ (Finding 4)', () => {
+    // bottomLimit ของ `limits` คือ 700 — bottom 750 ยังอยู่ใน viewportHeight (800)
+    // แต่เลยขอบบนของแถบปุ่มไปแล้ว ต้องถูกซ่อนไม่ให้ไปทับปุ่ม
+    expect(handleVisibility({ left: 0, top: 10, right: 100, bottom: 750 }, limits))
+      .toEqual({ start: true, end: false });
+    // bottom เท่ากับ bottomLimit พอดี ยังนับว่าไม่ล้ำ (ขอบเขต inclusive เดียวกับ viewportHeight)
+    expect(handleVisibility({ left: 0, top: 10, right: 100, bottom: 700 }, limits))
       .toEqual({ start: true, end: true });
   });
 

@@ -15,6 +15,7 @@ import {
 import { fitAndSendResize } from './terminal-resize.js';
 import { createTextSelection, selectionMouseInit, type TerminalPort } from './text-selection.js';
 import { createSelectionSheet } from './selection-sheet.js';
+import { createSelectionHandles, CONFIRM_BAR_HEIGHT_PX, type PlacementLimits } from './selection-handles.js';
 import { createClipboard } from './clipboard.js';
 import { loadSelectionPrefs } from './selection-prefs.js';
 import { createFullscreenController } from './fullscreen.js';
@@ -85,6 +86,14 @@ function backToLogin(): void {
 /** ตั้งค่าใน initTerminal และใช้ต่อใน bindTouch ซึ่งถูกเรียกหลังจากนั้น */
 let linkOpener: LinkOpener | null = null;
 let linkPort: TerminalPort | null = null;
+
+/**
+ * ตั้งค่าจริงใน initTerminal — ต้องอยู่ที่ module scope เพราะ bindTouch เป็นฟังก์ชัน
+ * แยกที่เรียกทีหลัง closure ของ initTerminal จึงมองไม่เห็นกัน touchend ใน bindTouch
+ * ต้องเรียกตัวนี้หลัง pointerUp ทุกครั้ง ไม่งั้นทางเดียวที่ overlay จะโผล่คือรอ
+ * PTY output มายิง t.onScroll โดยบังเอิญ
+ */
+let syncHandles: () => void = () => {};
 
 function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar } {
   const t = new Terminal({
@@ -180,7 +189,11 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       ),
     }),
     onPanelChange: () => {
-      requestAnimationFrame(() => sendResize());
+      // ต้อง syncHandles() ด้วย ไม่ใช่แค่ sendResize() — placementLimits() อ่าน
+      // rect ของ #keybar สด แต่ sendResize ผ่าน sendResize → fit → t.onResize
+      // ซึ่งยิงเฉพาะตอนจำนวนแถว/คอลัมน์เปลี่ยนจริง แผงตั้งค่าที่กางแค่บางส่วน
+      // ของแถวไม่ทำให้ cols/rows เปลี่ยน แถบยืนยันจะค้างทับแผงจนกว่าเหตุการณ์อื่นจะมาสะกิด
+      requestAnimationFrame(() => { sendResize(); syncHandles(); });
     },
   });
 
@@ -240,6 +253,10 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       }
       prevVisible = nextVisible;
       syncKeyboardButton();
+      // overlay ตรึงตำแหน่งด้วย viewport coordinates — IME โผล่/หุบไม่เปลี่ยนจำนวนแถว
+      // จึงไม่ผ่าน t.onResize เลย ต้องอาศัย visualViewport ตัวเดียวกับที่ใช้ตัดสิน
+      // สถานะคีย์บอร์ดข้างบนนี้แหละมาซิงก์ตำแหน่งหมุด/แถบยืนยันด้วย
+      syncHandles();
     });
   }
 
@@ -255,6 +272,48 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   });
   $('app').append(sheet.element);
 
+  const handles = createSelectionHandles({
+    // ต้อง sync ทันทีที่จับหมุด ไม่งั้น overlay จะยังวาด rect ก่อนจับค้างอยู่จนกว่า
+    // เหตุการณ์ถัดไปจะมาสะกิด — ผู้ใช้เห็นหมุดค้างที่จุดเดิมทั้งที่กำลังลากอยู่แล้ว
+    onGrab: corner => { selection?.beginHandleDrag(corner); syncHandles(); },
+    // ปลายทางของ touchmove/touchend ที่ selection-handles.ts ผูกเองระหว่างลากหมุด —
+    // bindTouch ใน main.ts มองไม่เห็นอีเวนต์พวกนี้เพราะ target ไม่ใช่ #terminal
+    onDragMove: (x, y) => selection?.pointerMove(x, y),
+    onDragEnd: (x, y) => { selection?.pointerUp(x, y); syncHandles(); },
+    onConfirm: () => selection?.confirm(),
+    onCancel: () => selection?.cancel(),
+  });
+  $('app').append(handles.element);
+
+  /**
+   * ขอบล่างที่ใช้ได้คือ top ของแถบปุ่ม ไม่ใช่ขอบ viewport — แถบปุ่มกินพื้นที่ล่างจอ
+   * อยู่ตลอด และความสูงของมันเปลี่ยนได้ตอนกางหน้า settings จึงต้องอ่านสดทุกครั้ง
+   */
+  const placementLimits = (): PlacementLimits => {
+    const bar = $('keybar').getBoundingClientRect();
+    return { viewportHeight: window.innerHeight, bottomLimit: bar.top, barHeight: CONFIRM_BAR_HEIGHT_PX };
+  };
+
+  /**
+   * overlay โผล่เฉพาะสถานะ adjusting — ระหว่างลากไม่ต้องมีหมุดให้รก และ onBlockChange
+   * ที่ยิงถี่ระหว่างลากจะไม่ทำให้ overlay กะพริบ
+   *
+   * ต้องเช็ค sheet.isOpen() ด้วย ไม่ใช่แค่ phase — confirm() ตั้งใจปล่อยให้
+   * phase ยังเป็น 'adjusting' ต่อไปเพื่อให้ไฮไลต์ของ xterm อยู่ใต้แผ่นผลลัพธ์
+   * แล้ว onRegionPicked ก็ซ่อน overlay เองครั้งเดียว แต่ t.onScroll (PTY
+   * output ระหว่างรันคำสั่ง แทบจะเกิดแน่นอน), t.onResize, resize ของ window,
+   * และ visualViewport resize ล้วนเรียก syncHandles() ซ้ำได้ทุกเมื่อ — ถ้าไม่กัน
+   * ตรงนี้ หมุดกับแถบยืนยันจะโผล่ทับ backdrop ของแผ่นผลลัพธ์กลับมาใหม่ ทั้งที่
+   * แตะอะไรก็ไม่ติดเพราะ backdrop ที่ z-index สูงกว่ากลืนทัชไปหมด
+   */
+  syncHandles = (): void => {
+    if (!selection || sheet.isOpen() || selection.state() !== 'adjusting') {
+      handles.place(null, placementLimits());
+      return;
+    }
+    handles.place(selection.blockRect(), placementLimits());
+  };
+
   const port = createTerminalPort(t, el, t.element ?? el);
   linkPort = port;
   linkOpener = createLinkOpener({
@@ -265,7 +324,11 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   selection = createTextSelection({
     terminal: port,
     loadPrefs: columns => loadSelectionPrefs(columns),
-    onRegionPicked: text => sheet.open(text),
+    onRegionPicked: text => {
+      // ซ่อน overlay ก่อนเปิดแผ่น ไม่งั้นหมุดจะลอยทับ backdrop
+      handles.place(null, placementLimits());
+      sheet.open(text);
+    },
     onModeChange: active => {
       el.classList.toggle('selecting', active);
       if (active) {
@@ -276,12 +339,22 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       } else {
         dispatchTerminalFocus('selection-exited');
       }
+      syncHandles();
       keybar.refresh();
+    },
+    onBlockChange: () => {
+      handles.setCopyEnabled(selection?.blockHasText() === true);
+      syncHandles();
     },
     vibrate: ms => navigator.vibrate?.(ms),
   });
 
   bindTouch(t, fit);
+  // การเลื่อนนี้มาจาก output ของ PTY เท่านั้น — ในโหมดเลือก stopGestures() ถูกเรียก
+  // และนิ้วเดียวทุกครั้งถูก selectionOwnsTouch() ยึดไป ผู้ใช้เลื่อนจอเองไม่ได้
+  t.onScroll(() => syncHandles());
+  t.onResize(() => syncHandles());
+  window.addEventListener('resize', syncHandles);
   dispatchTerminalFocus('session-ready');
   syncKeyboardButton();
 
@@ -524,6 +597,10 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
 
   const firstTouch = (e: TouchEvent): Touch => e.changedTouches[0]!;
 
+  // จุดล่าสุดที่นิ้วอยู่ระหว่างลากเลือกข้อความ — ใช้ตอน touchcancel เท่านั้น
+  // (ระบบท่าทาง เช่น สายเรียกเข้าหรือปาดขอบจอ) ซึ่งไม่มีพิกัดของตัวเองมาให้
+  let lastSelectionPoint: { x: number; y: number } | null = null;
+
   // เมาส์จริง: xterm ส่ง mouse report ให้ herdr ใน handler ของ mousedown ของมันเอง
   // ดักในเฟส capture เพื่อกลืนอีเวนต์ก่อนถึง xterm เมื่อมีลิงก์อยู่ใต้เคอร์เซอร์
   // ให้พฤติกรรมตรงกับการแตะ: คลิกลิงก์ = เปิดลิงก์อย่างเดียว ไม่สลับ pane
@@ -537,6 +614,7 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     e.preventDefault();          // กันเบราว์เซอร์สังเคราะห์ mouse/โฟกัส/ซูมหน้าเว็บเอง
     if (selectionOwnsTouch(e)) {
       const touch = firstTouch(e);
+      lastSelectionPoint = { x: touch.clientX, y: touch.clientY };
       selection!.pointerDown(touch.clientX, touch.clientY);
       // blur เสมอ ไม่ใช่แค่ตอนที่คีย์บอร์ดปิดอยู่ก่อน — ต่างจาก tap และ dragStart
       // ที่ตั้งใจคงสถานะเดิมของผู้ใช้ไว้
@@ -556,6 +634,7 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     e.preventDefault();
     if (selectionOwnsTouch(e)) {
       const touch = firstTouch(e);
+      lastSelectionPoint = { x: touch.clientX, y: touch.clientY };
       selection!.pointerMove(touch.clientX, touch.clientY);
       return;
     }
@@ -567,13 +646,28 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     if ((selection?.active() ?? false) && e.touches.length === 0 && e.changedTouches.length > 0) {
       const touch = firstTouch(e);
       selection!.pointerUp(touch.clientX, touch.clientY);
+      // finish() ใน text-selection.ts ตั้ง block ก่อนเปลี่ยน phase เป็น 'adjusting'
+      // onBlockChange จึง sync ตอนที่ state() ยังเป็น 'dragging' อยู่ ต้อง sync ซ้ำที่นี่
+      // ไม่งั้นหมุดจะไม่โผล่จนกว่าจะมี PTY output มายิง t.onScroll โดยบังเอิญ
+      syncHandles();
       return;
     }
     recognizer.onTouchEnd(points(e));
     pump();                      // ปล่อยให้ momentum ไหลต่อถ้ามี
   }, { passive: false });
 
-  el.addEventListener('touchcancel', () => {
+  el.addEventListener('touchcancel', e => {
+    // ท่าทางของระบบ (สายเรียกเข้า, ปาดขอบจอ) ตัดจบการลากเลือกโดยไม่มี touchend
+    // ถ้าไม่จบให้ผ่าน pointerUp ที่นี่ phase จะค้างที่ 'dragging' พร้อม drag ที่ยังไม่
+    // null และ overlay ยังซ่อนอยู่ — ผู้ใช้เห็นไฮไลต์ของ xterm ค้างอยู่โดยไม่มีหมุดให้ปรับ
+    // เลย แล้วนิ้วถัดไปจะเริ่มกรอบใหม่ทับของเดิมที่เพิ่งลากไปทันที
+    // ใช้ lastSelectionPoint (จุดล่าสุดจาก touchstart/touchmove) เพราะ touchcancel
+    // ไม่มีพิกัดของตัวเอง — mirror ท่าเดียวกับที่ selection-handles.ts ทำกับ touchcancel
+    // ตอนลากหมุด
+    if (selectionOwnsTouch(e) && lastSelectionPoint) {
+      selection!.pointerUp(lastSelectionPoint.x, lastSelectionPoint.y);
+      syncHandles();
+    }
     recognizer.onTouchCancel();
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
   });

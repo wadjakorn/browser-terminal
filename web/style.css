@@ -184,7 +184,14 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
   -webkit-touch-callout: none;
 }
 
-.keybar-btn-arrow .keybar-btn-label {
+/*
+ * รูปทรง chevron — ใช้ร่วมกันระหว่างปุ่มลูกศรบนแถบกับปุ่มย้ายลำดับในหน้า settings
+ *
+ * วาดจาก border สองด้านแทนกลิฟลูกศร เพราะกลิฟของแต่ละแพลตฟอร์มหนาบางไม่เท่ากัน
+ * และบางเครื่องเรนเดอร์เป็น emoji สีทับสีปุ่ม — ทั้งสองที่ต้องได้ลูกศรหน้าตาเดียวกัน
+ */
+.keybar-btn-arrow .keybar-btn-label,
+.keybar-mini-btn[data-move] .keybar-btn-label {
   width: .82rem;
   height: .82rem;
   font-size: 0;
@@ -193,11 +200,13 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
   border-radius: .06rem;
 }
 
-.keybar-btn[data-key-id="arrow-up"] .keybar-btn-label {
+.keybar-btn[data-key-id="arrow-up"] .keybar-btn-label,
+.keybar-mini-btn[data-move="up"] .keybar-btn-label {
   transform: translateY(.12rem) rotate(-45deg);
 }
 
-.keybar-btn[data-key-id="arrow-down"] .keybar-btn-label {
+.keybar-btn[data-key-id="arrow-down"] .keybar-btn-label,
+.keybar-mini-btn[data-move="down"] .keybar-btn-label {
   transform: translateY(-.12rem) rotate(135deg);
 }
 
@@ -277,6 +286,12 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
   border-radius: .45rem;
 }
 
+/* ปุ่มที่กดไม่ได้แต่หน้าตาเหมือนเดิมอ่านว่า "พัง" ไม่ใช่ "สุดทางแล้ว" */
+.keybar-mini-btn:disabled {
+  opacity: .3;
+  cursor: default;
+}
+
 .keybar-reset-btn {
   justify-self: start;
   min-width: 5.5rem;
@@ -291,6 +306,63 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
 .terminal.selecting {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
+
+/*
+ * overlay ต้อง fixed ไม่ใช่ flex item — .app เป็น flex column ที่ความสูงถูกตรึงด้วย
+ * --visible-height ของที่ append เข้าไปเฉยๆ จะไปเบียดความสูงของ .terminal
+ * เหตุผลเดียวกับที่ .sheet ทำ z-index ต่ำกว่า .sheet (20) เพื่อให้แผ่นผลลัพธ์ทับได้
+ */
+.sel-overlay {
+  position: fixed; inset: 0; z-index: 15;
+  pointer-events: none;
+}
+
+/*
+ * touch-action: none ที่นี่จำเป็นแม้ .terminal จะตั้งไว้แล้ว — overlay อยู่นอก .terminal
+ * ไม่ได้สืบทอดมา ถ้าไม่ตั้ง เบราว์เซอร์จะกินการลากไปทำ scroll ก่อนถึง handler
+ */
+.sel-handle {
+  position: absolute;
+  width: 2.75rem; height: 2.75rem; /* 44px; keep synchronized with KEY_TARGET_PX */
+  margin: -1.375rem 0 0 -1.375rem;
+  border-radius: 50%;
+  pointer-events: auto;
+  touch-action: none;
+  background: radial-gradient(circle at center, var(--accent) 0 .4rem, transparent .45rem);
+}
+
+/*
+ * keep synchronized with CONFIRM_BAR_HEIGHT_PX (48) in selection-handles.ts:
+ * .sel-btn สูง 2.75rem (44px, border-box รวมเส้นขอบในตัว) + padding บน/ล่างของ
+ * แถบนี้ที่ .125rem (2px) ต่อด้าน รวมเป็น 44 + 2 + 2 = 48px พอดี — ปุ่มยังคง
+ * แตะได้เต็ม 44px ตามมาตรฐานเดียวกับ KEY_TARGET_PX ไม่ต้องลดขนาดเพื่อยัดให้พอดี 48px
+ *
+ * เส้นขอบใช้ inset box-shadow แทน border จริง เพราะ inset ไม่กินพื้นที่ layout
+ * (border จริงจะบวกความสูงเพิ่มและทำให้เลข 48px ข้างบนคลาดเคลื่อน)
+ */
+.sel-confirm {
+  position: absolute; left: 50%;
+  transform: translateX(-50%);
+  display: flex; gap: .5rem;
+  padding: .125rem .25rem;
+  border-radius: .6rem;
+  background: #15151c;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45), inset 0 0 0 1px #2e2e3a;
+  pointer-events: auto;
+}
+
+/* แถบทับกรอบเมื่อทั้งเหนือและใต้ไม่พอที่ (เคส 'over') — โปร่งลงเล็กน้อยกันมันบังตัวอักษรที่ถูกเลือกทั้งหมด */
+.sel-confirm[data-side="over"] { opacity: .92; }
+
+.sel-btn {
+  box-sizing: border-box;
+  min-width: 5rem; min-height: 2.75rem; /* 44px; keep synchronized with KEY_TARGET_PX */
+  font: inherit; color: var(--fg);
+  background: #22222c;
+  border: 1px solid #2e2e3a; border-radius: .45rem;
+}
+
+.sel-btn:disabled { opacity: .3; }
 
 .sheet {
   position: fixed; inset: 0; z-index: 20;

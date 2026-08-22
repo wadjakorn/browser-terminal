@@ -181,11 +181,27 @@ export function mountKeybar(container: HTMLElement, handlers: {
     return button;
   };
 
-  const makeMiniButton = (label: string, title: string, onClick: () => void): HTMLButtonElement => {
-    const button = makeButton(label, onClick);
+  /**
+   * ปุ่มย้ายลำดับใช้ chevron ตัวเดียวกับปุ่มลูกศรบนแถบ ไม่ใช่อักขระ ↑/↓
+   *
+   * ปุ่มลูกศรไม่ได้วาดด้วยตัวอักษร แต่ประกอบจาก border สองด้านแล้วหมุนเอา
+   * (ดู .keybar-btn-arrow ใน style.css) เพราะกลิฟลูกศรของแต่ละแพลตฟอร์มหนาบางไม่เท่ากัน
+   * และบางเครื่องเรนเดอร์เป็น emoji สีทับสีปุ่ม ถ้าปุ่มย้ายลำดับใช้ตัวอักษรต่อไป
+   * ผู้ใช้จะเห็นลูกศรสองแบบในหน้าจอเดียวกันโดยที่ทั้งคู่หมายถึงทิศเดียวกัน
+   */
+  const makeMoveButton = (move: 'up' | 'down', title: string, onClick: () => void): HTMLButtonElement => {
+    const button = makeButton('', onClick);
     button.classList.add('keybar-mini-btn');
+    button.dataset.move = move;
     button.title = title;
     button.setAttribute('aria-label', title);
+
+    // ทิศทางสื่อผ่าน aria-label อยู่แล้ว รูปทรงจึงเป็นของตกแต่งล้วน
+    const chevron = document.createElement('span');
+    chevron.className = 'keybar-btn-label';
+    chevron.setAttribute('aria-hidden', 'true');
+    button.replaceChildren(chevron);
+
     return button;
   };
 
@@ -316,7 +332,26 @@ export function mountKeybar(container: HTMLElement, handlers: {
     title.textContent = 'Customize keys';
     panel.append(title);
 
-    for (const spec of orderedCatalog()) {
+    const specs = orderedCatalog();
+    const visibleCount = specs.filter(spec => !hidden.has(spec.id)).length;
+    let hiddenHeadingShown = false;
+
+    specs.forEach((spec, index) => {
+      const inHiddenGroup = hidden.has(spec.id);
+
+      // เส้นแบ่งกลุ่มต้องมองเห็นได้ ไม่ใช่กฎเงียบๆ ที่ผู้ใช้ต้องอนุมานเอาเองจากการที่
+      // ปุ่มลูกศรบางตัวกดไม่ลง
+      if (inHiddenGroup && !hiddenHeadingShown) {
+        const heading = document.createElement('div');
+        heading.className = 'keybar-customize-title';
+        heading.textContent = 'ซ่อนอยู่';
+        panel.append(heading);
+        hiddenHeadingShown = true;
+      }
+
+      const groupStart = inHiddenGroup ? visibleCount : 0;
+      const groupEnd = inHiddenGroup ? specs.length - 1 : visibleCount - 1;
+
       const row = document.createElement('div');
       row.className = 'keybar-customize-row';
       row.dataset.category = spec.category;
@@ -337,16 +372,20 @@ export function mountKeybar(container: HTMLElement, handlers: {
       label.textContent = `${spec.label} · ${spec.title}`;
       name.append(checkbox, label);
 
-      const previous = makeMiniButton('←', `Move ${spec.label} earlier`, () => {
+      // ขึ้น/ลง ไม่ใช่ ซ้าย/ขวา — ลิสต์นี้เรียงแนวตั้ง ทิศที่แถวขยับจริงคือขึ้นกับลง
+      const previous = makeMoveButton('up', `Move ${spec.label} up`, () => {
         applyPreferences(moveKey(preferences, spec.id, -1));
       });
-      const next = makeMiniButton('→', `Move ${spec.label} later`, () => {
+      previous.disabled = index === groupStart;
+
+      const next = makeMoveButton('down', `Move ${spec.label} down`, () => {
         applyPreferences(moveKey(preferences, spec.id, 1));
       });
+      next.disabled = index === groupEnd;
 
       row.append(name, previous, next);
       panel.append(row);
-    }
+    });
 
     const reset = makeButton('Reset', () => {
       applyPreferences(resetKeybarPreferences());

@@ -14,14 +14,14 @@ describe('key catalog', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(DEFAULT_KEY_IDS).toEqual([
       'esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
-      'shift-tab', 'shift', 'alt', 'interrupt', 'select', 'paste', 'settings', 'fullscreen',
+      'shift-tab', 'shift', 'alt', 'interrupt', 'enter', 'select', 'paste', 'settings', 'fullscreen',
       'pipe', 'tilde', 'slash', 'dash',
     ]);
     expect(ALL_KEY_IDS.slice(0, DEFAULT_KEY_IDS.length)).toEqual(DEFAULT_KEY_IDS);
     expect(ALL_KEY_IDS).toEqual(KEY_CATALOG.map(key => key.id));
     expect(resolveKeySpecs(DEFAULT_KEY_IDS).map(key => key.label)).toEqual([
       'Esc', 'Tab', 'Ctrl', '↑', '↓', '←', '→', 'Shift Tab', 'Shift',
-      'Alt', '^C', '⧉', '⎘', '⚙', '⛶', '|', '~', '/', '-',
+      'Alt', '^C', '⏎', '⧉', '⎘', '⚙', '⛶', '|', '~', '/', '-',
     ]);
   });
 
@@ -69,6 +69,12 @@ describe('key catalog', () => {
     expect(getKeySpec('shift-tab')?.key).toEqual({ kind: 'backtab' });
     expect(getKeySpec('interrupt')?.key).toEqual({ kind: 'interrupt' });
     expect(getKeySpec('ctrl')?.key).toEqual({ kind: 'modifier', name: 'ctrl' });
+  });
+
+  it('ปุ่ม Enter ส่ง carriage return ไม่ใช่ line feed', () => {
+    const spec = getKeySpec('enter');
+    expect(spec?.key).toEqual({ kind: 'literal', data: '\r' });
+    expect(spec?.defaultVisible).toBe(true);
   });
 });
 

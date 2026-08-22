@@ -14,12 +14,23 @@ const DEFAULT_VISIBLE_IDS = new Set(DEFAULT_KEY_IDS);
 const REQUIRED_VISIBLE_IDS = new Set(['settings']);
 const UTILITY_IDS = new Set(['settings', 'fullscreen']);
 
+/**
+ * ปุ่มที่เปิดอยู่ก่อน ปุ่มที่ซ่อนไว้ต่อท้าย — รักษาลำดับสัมพัทธ์ภายในแต่ละกลุ่ม
+ *
+ * เหตุผลที่บังคับใน order จริงแทนที่จะเรียงตอนแสดงผล: `←/→` ในหน้า settings สลับ
+ * ตำแหน่งใน order โดยตรง ถ้าเรียงแค่ตอนแสดงผล ผู้ใช้จะเห็นสองปุ่มที่ติดกันบนจอ
+ * แต่กดสลับแล้วไม่ขยับ เพราะจริงๆ มีปุ่มที่ซ่อนอยู่คั่นกลางหลายตัว
+ *
+ * แถบปุ่มจริงไม่ขยับจากการนี้ — keybarSurfaceIds() กรองปุ่มที่ซ่อนทิ้งอยู่แล้ว
+ * การย้ายมันไปท้ายลิสต์จึงไม่เปลี่ยนลำดับสัมพัทธ์ของปุ่มที่เหลือ
+ */
+function partitionOrder(order: readonly string[], hidden: ReadonlySet<string>): string[] {
+  return [...order.filter(id => !hidden.has(id)), ...order.filter(id => hidden.has(id))];
+}
+
 export function defaultKeybarPreferences(): KeybarPreferences {
-  return {
-    version: 1,
-    order: [...ALL_IDS],
-    hidden: ALL_IDS.filter(id => !DEFAULT_VISIBLE_IDS.has(id)),
-  };
+  const hidden = new Set(ALL_IDS.filter(id => !DEFAULT_VISIBLE_IDS.has(id)));
+  return { version: 1, order: partitionOrder(ALL_IDS, hidden), hidden: [...hidden] };
 }
 
 /**
@@ -32,12 +43,17 @@ export function defaultKeybarPreferences(): KeybarPreferences {
  * ไม่เลือกวิธี bump storage key เป็น v2 เพราะนั่นคือการทิ้งลำดับและปุ่มที่ผู้ใช้
  * ซ่อนไว้เองทั้งหมด เพื่อแก้ปัญหาของปุ่มไม่กี่ปุ่ม
  */
-function insertMissingIds(order: string[], seen: Set<string>): void {
+function insertMissingIds(order: string[], seen: Set<string>, hidden: ReadonlySet<string>): void {
   for (const id of ALL_IDS) {
     if (seen.has(id)) continue;
     const target = defaultOrderOf(id);
-    // หาตำแหน่งแรกที่ปุ่มเดิมมี defaultOrder มากกว่าปุ่มใหม่ แล้วแทรกไว้ข้างหน้า
-    const at = order.findIndex(existing => defaultOrderOf(existing) > target);
+    const inHiddenGroup = hidden.has(id);
+    // เทียบเฉพาะกับปุ่มในกลุ่มเดียวกัน — พอมี invariant การเรียง order ทั้งเส้นไม่ได้
+    // ไล่ตาม defaultOrder อีกต่อไป กลุ่มที่ซ่อนท้ายลิสต์มี defaultOrder ต่ำได้
+    // ถ้าไม่กรองกลุ่ม ปุ่มใหม่จะไปแทรกกลางกลุ่มที่ซ่อน แล้วโดน partition ดันกลับมา
+    // ท้ายกลุ่มเปิดแทนตำแหน่งที่ defaultOrder ตั้งใจไว้
+    const at = order.findIndex(existing =>
+      hidden.has(existing) === inHiddenGroup && defaultOrderOf(existing) > target);
     if (at < 0) order.push(id);
     else order.splice(at, 0, id);
     seen.add(id);
@@ -54,11 +70,13 @@ export function normalizeKeybarPreferences(value: unknown): KeybarPreferences {
     seen.add(id);
     return true;
   });
-  insertMissingIds(order, seen);
-  const hidden = Array.isArray(candidate.hidden)
-    ? candidate.hidden.filter((id): id is string => typeof id === 'string' && CATALOG_IDS.has(id))
-    : [];
-  return { version: 1, order, hidden: [...new Set(hidden)] };
+  const hiddenSet = new Set(
+    Array.isArray(candidate.hidden)
+      ? candidate.hidden.filter((id): id is string => typeof id === 'string' && CATALOG_IDS.has(id))
+      : [],
+  );
+  insertMissingIds(order, seen, hiddenSet);
+  return { version: 1, order: partitionOrder(order, hiddenSet), hidden: [...hiddenSet] };
 }
 
 function readStorage(storage?: Storage): Storage | undefined {
@@ -96,6 +114,12 @@ export function moveKey(preferences: KeybarPreferences, keyId: string, direction
   const index = normalized.order.indexOf(keyId);
   const target = index + direction;
   if (index < 0 || target < 0 || target >= normalized.order.length) return normalized;
+
+  // ตรึงที่เส้นแบ่งกลุ่ม ไม่ใช่แค่ขอบ array — ปล่อยให้ข้ามได้เท่ากับปุ่มกระโดดสถานะ
+  // เปิด/ปิดโดยที่ผู้ใช้แค่กดลูกศร ซึ่งไม่ใช่สิ่งที่ปุ่มลูกศรสัญญาไว้
+  const hidden = new Set(normalized.hidden);
+  if (hidden.has(normalized.order[index]!) !== hidden.has(normalized.order[target]!)) return normalized;
+
   const order = [...normalized.order];
   [order[index], order[target]] = [order[target]!, order[index]!];
   return { ...normalized, order };
@@ -109,10 +133,22 @@ export function setKeyHidden(preferences: KeybarPreferences, keyId: string, hidd
   if (hidden && !UTILITY_IDS.has(keyId) && visibleTerminalIds.length === 1 && !normalized.hidden.includes(keyId)) {
     return normalized;
   }
+
+  const order = [...normalized.order];
+  const index = order.indexOf(keyId);
+  // ถ้าปุ่มในลำดับแล้ว เอามันออกจากตำแหน่งเดิม
+  if (index >= 0) {
+    order.splice(index, 1);
+  }
+  // เมื่อ show/hide ให้ย้ายไปท้าย ตัว normalize จะจัด partition
+  order.push(keyId);
+
   const hiddenIds = new Set(normalized.hidden);
   if (hidden) hiddenIds.add(keyId);
   else hiddenIds.delete(keyId);
-  return { ...normalized, hidden: [...hiddenIds] };
+  // ต้องผ่าน normalize อีกรอบ ไม่ใช่คืน object ตรงๆ — การเปลี่ยน hidden คือการย้ายกลุ่ม
+  // ซึ่งแปลว่า order ที่ถืออยู่ละเมิด invariant ทันทีที่บรรทัดนี้ทำงาน
+  return normalizeKeybarPreferences({ version: 1, order, hidden: [...hiddenIds] });
 }
 
 export function resetKeybarPreferences(storage?: Storage): KeybarPreferences {

@@ -81,7 +81,11 @@ export interface TextSelectionDeps {
   onRegionPicked: (text: string) => void;
   onModeChange: (active: boolean) => void;
   vibrate?: (ms: number) => void;
+  /** ยิงทุกครั้งที่กรอบเปลี่ยนหรือหาย — main.ts ใช้ขยับหมุดตาม */
+  onBlockChange?: (block: Block | null) => void;
 }
+
+export type SelectionState = 'off' | 'idle' | 'dragging' | 'adjusting' | 'grabbing';
 
 interface Drag {
   anchor: Cell;
@@ -95,6 +99,13 @@ export function createTextSelection(deps: TextSelectionDeps) {
   let modeActive = false;
   let panes: PaneBounds[] = [];
   let drag: Drag | null = null;
+  let block: Block | null = null;
+  let phase: SelectionState = 'off';
+
+  const setBlock = (next: Block | null): void => {
+    block = next;
+    deps.onBlockChange?.(next);
+  };
 
   const detectPanes = (): PaneBounds[] => {
     const top = terminal.viewportTop();
@@ -135,24 +146,28 @@ export function createTextSelection(deps: TextSelectionDeps) {
     };
   };
 
+  /**
+   * จบการลาก = เข้าโหมดปรับ ไม่ใช่จบงาน
+   *
+   * บนจอมือถือการลากครั้งเดียวให้ตรงเป๊ะเป็นไปไม่ได้ ก่อนหน้านี้ลากพลาดแปลว่าต้อง
+   * ปิดแผ่น ออกจากโหมด แล้วเริ่มใหม่ทั้งหมด
+   *
+   * กรอบที่ดึงข้อความไม่ได้ก็ไม่ล้างทิ้ง — ผู้ใช้ลากหมุดต่อจนโดนข้อความได้เลย
+   * ปุ่มคัดลอกที่ disabled คือคำบอกที่พอแล้ว
+   */
   const finish = (): void => {
     if (!drag) return;
-    const block: Block = blockFrom(drag.anchor, drag.focus);
-    const text = extractText(block, terminal.readLine);
+    setBlock(blockFrom(drag.anchor, drag.focus));
     drag = null;
-
-    if (text === '') {
-      // ไฮไลต์ที่ค้างอยู่จะไม่ตรงกับอะไรที่ผู้ใช้ทำอะไรต่อได้ — ล้างทิ้ง แต่ยังอยู่ในโหมด
-      terminal.clearSelection();
-      return;
-    }
-    deps.onRegionPicked(text);
+    phase = 'adjusting';
   };
 
   const setMode = (next: boolean): void => {
     if (modeActive === next) return;
     modeActive = next;
     drag = null;
+    setBlock(null);
+    phase = next ? 'idle' : 'off';
     if (next) {
       // ตรวจใหม่ทุกครั้งที่เข้าโหมด ไม่ใช่ครั้งเดียวตอนสร้าง — ผู้ใช้ย่อ/ขยาย sidebar
       // ระหว่างการใช้สองครั้งได้เสมอ และค่าที่ค้างไว้จะผิดโดยไม่มีอะไรฟ้อง
@@ -178,6 +193,8 @@ export function createTextSelection(deps: TextSelectionDeps) {
       // ถ้าปล่อยให้เป็น null แล้วตกไปใช้เต็มความกว้าง ผู้ใช้จะได้เส้นแบ่งติดมาโดยไม่รู้ตัว
       const pane = nearestPane(panes, cell.column);
       const anchor: Cell = { line: cell.line, column: clampColumn(cell.column, pane) };
+      setBlock(null);
+      phase = 'dragging';
       drag = { anchor, pane, focus: anchor };
 
       const px = pixelAt(anchor);
@@ -205,5 +222,70 @@ export function createTextSelection(deps: TextSelectionDeps) {
     },
 
     cancel(): void { setMode(false); },
+
+    state(): SelectionState { return phase; },
+    currentBlock(): Block | null { return block; },
+
+    /**
+     * จับหมุด = ลากต่อจากมุมตรงข้าม
+     *
+     * blockFrom() คำนวณ min/max อยู่แล้ว การลากข้ามอีกมุมไปจึงพลิกกรอบให้เองถูกต้อง
+     * โดยไม่ต้องมีสาขาแยก
+     *
+     * pane ต้องมาจากมุมที่ตรึงไว้ ไม่ใช่ null — ถ้าเป็น null clampColumn() กลายเป็น
+     * no-op แล้วการลากหมุดจะดึงเส้นแบ่ง pane ติดมา ซึ่งคือปัญหาที่ทั้งไฟล์นี้แก้อยู่
+     */
+    beginHandleDrag(corner: 'start' | 'end'): void {
+      if (!block) return;
+      const anchor: Cell = corner === 'start'
+        ? { line: block.bottomLine, column: block.endColumn }
+        : { line: block.topLine, column: block.startColumn };
+      const focus: Cell = corner === 'start'
+        ? { line: block.topLine, column: block.startColumn }
+        : { line: block.bottomLine, column: block.endColumn };
+      drag = { anchor, pane: nearestPane(panes, anchor.column), focus };
+      phase = 'grabbing';
+      deps.vibrate?.(10);
+
+      const px = pixelAt(anchor);
+      terminal.dispatchMouse('mousedown', px.x, px.y);
+      const focusPx = pixelAt(focus);
+      terminal.dispatchMouse('mousemove', focusPx.x, focusPx.y);
+    },
+
+    /**
+     * ไม่ clamp ให้อยู่ในจอโดยตั้งใจ — คืนพิกัดจริงแม้ติดลบหรือเกินความสูง
+     * ถ้า clamp ตรงนี้ หมุดจะไปเกาะขอบจอแล้วผู้ใช้เข้าใจว่ากรอบสิ้นสุดตรงนั้น
+     * แล้วลากต่อจากตำแหน่งที่ผิด selection-handles.ts เป็นคนตัดสินว่าจะซ่อนอันไหน
+     */
+    blockRect() {
+      if (!block) return null;
+      const { cellWidth, cellHeight } = terminal.screenMetrics();
+      const topLeft = pixelAt({ line: block.topLine, column: block.startColumn });
+      const bottomRight = pixelAt({ line: block.bottomLine, column: block.endColumn });
+      return {
+        left: topLeft.x - cellWidth / 2,
+        top: topLeft.y - cellHeight / 2,
+        right: bottomRight.x + cellWidth / 2,
+        bottom: bottomRight.y + cellHeight / 2,
+      };
+    },
+
+    /** กรอบที่คลุมแต่ช่องว่างดึงข้อความไม่ได้ — ปุ่มคัดลอกต้องดับ ไม่ใช่กดแล้วเงียบ */
+    blockHasText(): boolean {
+      return block !== null && extractText(block, terminal.readLine) !== '';
+    },
+
+    /**
+     * ไม่ออกจากโหมดตรงนี้ — setMode(false) จะเรียก clearSelection() ทำให้ไฮไลต์หายไป
+     * ใต้แผ่นที่เพิ่งเปิด ทั้งที่ข้อความบนแผ่นยังหมายถึงกรอบนั้นอยู่
+     * ผู้ปิดโหมดคือ sheet.onClose เหมือนเดิม (main.ts)
+     */
+    confirm(): void {
+      if (!block) return;
+      const text = extractText(block, terminal.readLine);
+      if (text === '') return;
+      deps.onRegionPicked(text);
+    },
   };
 }

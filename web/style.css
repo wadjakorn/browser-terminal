@@ -292,23 +292,28 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
   display: inline-grid;
   place-items: center;
   box-sizing: border-box;
+  line-height: 1;
+}
+
+/*
+ * กรอบปุ่มใส่ได้เฉพาะตัวที่แสดงด้วยตัวอักษร
+ *
+ * ลูกศรวาดรูปทรงจาก border สองด้านของตัวมันเอง ถ้าให้กรอบสี่ด้านมาก่อนแล้วค่อย
+ * ทับสองด้าน อีกสองด้านที่เหลือจะยังอยู่ — พอหมุน 45° ก็ได้ข้าวหลามตัดแทนลูกศร
+ */
+.keybar-customize-key:not([data-move]) {
   min-width: 2rem;
   height: 1.5rem;
   padding: 0 .3rem;
-  line-height: 1;
   color: var(--fg);
   background: #22222c;
   border: 1px solid #343443;
   border-radius: .35rem;
 }
 
-/* ลูกศรวาดด้วย border ของตัวเอง กรอบปุ่มจะกลายเป็นเส้นซ้อนเส้น */
+/* .82rem + .59rem สองข้าง = 2rem เท่ากับ min-width ของกรอบปุ่ม ชื่อจึงเรียงตรงกันทุกแถว */
 .keybar-customize-key[data-move] {
-  min-width: 0;
-  padding: 0;
-  background: none;
-  border-color: currentColor;
-  margin: 0 .5rem;
+  margin-inline: .59rem;
 }
 
 .keybar-customize-name input {

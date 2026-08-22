@@ -273,6 +273,7 @@ export function mountKeybar(container: HTMLElement, handlers: {
     button.setAttribute('aria-label', spec.title);
     button.dataset.keyId = spec.id;
     button.dataset.category = spec.category;
+    if (spec.arrow) button.dataset.move = spec.arrow;
     if (repeatable) {
       button.classList.add('keybar-btn-arrow');
       cancelRenderedRepeats.push(bindPressRepeat(button, activate));
@@ -368,9 +369,21 @@ export function mountKeybar(container: HTMLElement, handlers: {
         applyPreferences(setKeyHidden(preferences, spec.id, !checkbox.checked));
       });
 
+      /*
+       * ตัวปุ่มในลิสต์ต้องหน้าตาเหมือนปุ่มจริงบนแถบ ไม่ใช่ข้อความแทนมัน
+       *
+       * ปุ่มลูกศรบนแถบวาด chevron ไม่ได้ใช้กลิฟ ถ้าลิสต์นี้พิมพ์ `↑` เป็นตัวอักษร
+       * ผู้ใช้จะต้องเดาเองว่าบรรทัดไหนคุมปุ่มไหน — และ title เดิมก็ยัดกลิฟซ้ำอีกรอบ
+       * กลายเป็น `↑ · Arrow ↑`
+       */
+      const key = document.createElement('span');
+      key.className = 'keybar-customize-key';
+      if (spec.arrow) key.dataset.move = spec.arrow;
+      else key.textContent = spec.shortLabel ?? spec.label;
+
       const label = document.createElement('span');
-      label.textContent = `${spec.label} · ${spec.title}`;
-      name.append(checkbox, label);
+      label.textContent = spec.title;
+      name.append(checkbox, key, label);
 
       // ขึ้น/ลง ไม่ใช่ ซ้าย/ขวา — ลิสต์นี้เรียงแนวตั้ง ทิศที่แถวขยับจริงคือขึ้นกับลง
       const previous = makeMoveButton('up', `Move ${spec.label} up`, () => {

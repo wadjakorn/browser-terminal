@@ -22,6 +22,8 @@ export interface KeySpec {
   key?: BarKey;
   action?: KeyAction;
   utility?: KeyUtility;
+  /** ปุ่มลูกศร — UI วาด chevron แทนกลิฟ ทิศทางนี้บอกว่าหมุนไปทางไหน */
+  arrow?: 'up' | 'down' | 'left' | 'right';
   /** ปุ่มที่มีสถานะติด/ดับ — keybar จะถามสถานะมาทาสี */
   toggle?: boolean;
   defaultVisible: boolean;
@@ -32,10 +34,20 @@ export interface KeySpec {
 
 export const KEY_TARGET_PX = 44;
 
+const ARROW_DIRECTIONS = { A: 'up', B: 'down', C: 'right', D: 'left' } as const;
+
+/**
+ * ทิศทางมาจาก final byte ของ escape sequence ไม่ใช่พารามิเตอร์แยก
+ *
+ * เป็นแหล่งข้อมูลเดียวกับไบต์ที่ส่งจริง ทิศที่ UI วาดกับปุ่มที่ terminal ได้รับ
+ * จึงเพี้ยนจากกันไม่ได้ และ title เลิกยัดกลิฟซ้ำ (`Arrow ↑`) เพราะ screen reader
+ * อ่านมันไม่ออก ส่วนคนที่อ่านออกก็เห็นลูกศรอยู่ข้างๆ อยู่แล้ว
+ */
 const arrow = (id: string, label: string, final: 'A' | 'B' | 'C' | 'D', order: number): KeySpec => ({
   id,
   label,
-  title: `Arrow ${label}`,
+  arrow: ARROW_DIRECTIONS[final],
+  title: `Arrow ${ARROW_DIRECTIONS[final]}`,
   category: 'navigation',
   key: { kind: 'literal', data: `\x1b[${final}` },
   defaultVisible: true,

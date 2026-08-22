@@ -185,13 +185,18 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
 }
 
 /*
- * รูปทรง chevron — ใช้ร่วมกันระหว่างปุ่มลูกศรบนแถบกับปุ่มย้ายลำดับในหน้า settings
+ * รูปทรง chevron — ใช้ร่วมกันสามที่: ปุ่มลูกศรบนแถบ, ปุ่มย้ายลำดับในหน้า settings
+ * และตัวอย่างปุ่มที่โชว์ในแต่ละแถวของหน้า settings
  *
  * วาดจาก border สองด้านแทนกลิฟลูกศร เพราะกลิฟของแต่ละแพลตฟอร์มหนาบางไม่เท่ากัน
- * และบางเครื่องเรนเดอร์เป็น emoji สีทับสีปุ่ม — ทั้งสองที่ต้องได้ลูกศรหน้าตาเดียวกัน
+ * และบางเครื่องเรนเดอร์เป็น emoji สีทับสีปุ่ม — ทุกที่ต้องได้ลูกศรหน้าตาเดียวกัน
+ *
+ * ทิศทางมาจาก data-move ที่ keybar.ts เขียนจาก spec.arrow ไม่ใช่จาก id ของปุ่ม —
+ * ผูกกับ id แปลว่าเปลี่ยนชื่อ id แล้วลูกศรหายไปเงียบๆ โดยไม่มีอะไรฟ้อง
  */
 .keybar-btn-arrow .keybar-btn-label,
-.keybar-mini-btn[data-move] .keybar-btn-label {
+.keybar-mini-btn[data-move] .keybar-btn-label,
+.keybar-customize-key[data-move] {
   width: .82rem;
   height: .82rem;
   font-size: 0;
@@ -200,21 +205,25 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
   border-radius: .06rem;
 }
 
-.keybar-btn[data-key-id="arrow-up"] .keybar-btn-label,
-.keybar-mini-btn[data-move="up"] .keybar-btn-label {
+.keybar-btn[data-move="up"] .keybar-btn-label,
+.keybar-mini-btn[data-move="up"] .keybar-btn-label,
+.keybar-customize-key[data-move="up"] {
   transform: translateY(.12rem) rotate(-45deg);
 }
 
-.keybar-btn[data-key-id="arrow-down"] .keybar-btn-label,
-.keybar-mini-btn[data-move="down"] .keybar-btn-label {
+.keybar-btn[data-move="down"] .keybar-btn-label,
+.keybar-mini-btn[data-move="down"] .keybar-btn-label,
+.keybar-customize-key[data-move="down"] {
   transform: translateY(-.12rem) rotate(135deg);
 }
 
-.keybar-btn[data-key-id="arrow-left"] .keybar-btn-label {
+.keybar-btn[data-move="left"] .keybar-btn-label,
+.keybar-customize-key[data-move="left"] {
   transform: translateX(.12rem) rotate(-135deg);
 }
 
-.keybar-btn[data-key-id="arrow-right"] .keybar-btn-label {
+.keybar-btn[data-move="right"] .keybar-btn-label,
+.keybar-customize-key[data-move="right"] {
   transform: translateX(-.12rem) rotate(45deg);
 }
 
@@ -270,6 +279,36 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
   text-overflow: ellipsis;
   white-space: nowrap;
   font: .82rem ui-monospace, monospace;
+}
+
+/*
+ * ตัวอย่างปุ่มหน้าแถว — กล่องขนาดคงที่เพื่อให้ทุกแถวเรียงตรงกันเป็นคอลัมน์เดียว
+ *
+ * ปุ่มมีตั้งแต่ `|` ตัวเดียวไปจนถึง `Shift Tab` ถ้าปล่อยให้กว้างตามเนื้อหา
+ * ชื่อปุ่มที่ตามหลังจะเยื้องไม่ตรงกันสักแถว
+ */
+.keybar-customize-key {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+  min-width: 2rem;
+  height: 1.5rem;
+  padding: 0 .3rem;
+  line-height: 1;
+  color: var(--fg);
+  background: #22222c;
+  border: 1px solid #343443;
+  border-radius: .35rem;
+}
+
+/* ลูกศรวาดด้วย border ของตัวเอง กรอบปุ่มจะกลายเป็นเส้นซ้อนเส้น */
+.keybar-customize-key[data-move] {
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border-color: currentColor;
+  margin: 0 .5rem;
 }
 
 .keybar-customize-name input {

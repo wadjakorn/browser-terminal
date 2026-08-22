@@ -54,6 +54,27 @@ describe('key catalog', () => {
       .toEqual(['arrow-up', 'arrow-down', 'arrow-left', 'arrow-right']);
   });
 
+  it('ทิศของลูกศรตรงกับ escape sequence ที่ส่งจริง', () => {
+    // UI วาด chevron จาก spec.arrow ส่วน terminal ได้ final byte — สองค่านี้เพี้ยนกันไม่ได้
+    const finals = { up: 'A', down: 'B', right: 'C', left: 'D' };
+    const arrows = KEY_CATALOG.filter(spec => spec.arrow);
+
+    expect(arrows.map(spec => spec.id))
+      .toEqual(['arrow-up', 'arrow-down', 'arrow-left', 'arrow-right']);
+
+    for (const spec of arrows) {
+      expect(spec.key).toEqual({ kind: 'literal', data: `\x1b[${finals[spec.arrow!]}` });
+    }
+  });
+
+  it('title ของลูกศรเป็นคำ ไม่ใช่กลิฟซ้ำ — screen reader อ่านกลิฟไม่ออก', () => {
+    expect(getKeySpec('arrow-up')?.title).toBe('Arrow up');
+    expect(getKeySpec('arrow-left')?.title).toBe('Arrow left');
+    for (const spec of KEY_CATALOG.filter(s => s.arrow)) {
+      expect(spec.title).not.toContain(spec.label);
+    }
+  });
+
   it('exposes accessible titles for icon-only or short labels', () => {
     for (const spec of KEY_CATALOG) {
       expect(spec.title.length).toBeGreaterThan(0);

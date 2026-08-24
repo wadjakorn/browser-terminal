@@ -10,6 +10,7 @@ import {
 } from './auth.js';
 import { createLoginLimiter } from './ratelimit.js';
 import { clientIp } from './clientip.js';
+import { MAX_IMAGE_BYTES, sniffImageKind, stageImage } from './image-staging.js';
 import { createEpochStore } from './epoch.js';
 import { attachPty, parseDims } from './pty.js';
 
@@ -47,6 +48,25 @@ export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     chunks.push(c as Buffer);
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+/**
+ * อ่าน body ของรูปที่อัปโหลด — ใช้ `readJsonBody` ซ้ำไม่ได้เพราะมันเพดาน 4 KB
+ * และ `JSON.parse` ทั้งก้อน แต่ **วินัยเรื่อง `destroy()` ก่อน throw เหมือนกันทุกอย่าง**
+ * ด้วยเหตุผลเดียวกับที่อธิบายไว้เหนือ `readJsonBody`
+ */
+export async function readImageBody(req: IncomingMessage, max: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    size += (c as Buffer).length;
+    if (size > max) {
+      req.destroy();
+      throw new Error('รูปใหญ่เกินไป');
+    }
+    chunks.push(c as Buffer);
+  }
+  return Buffer.concat(chunks);
 }
 
 /**
@@ -182,6 +202,56 @@ export function createServer(cfg: Config) {
       epochs.bump();
       if (active && active.readyState === active.OPEN) active.close(4001, 'logged out');
       res.writeHead(200, { 'set-cookie': cookieHeader('', 0, cfg.cookieSecure) }).end('ok');
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/api/image') {
+      // ปิดอยู่ = ทำตัวเหมือนไม่มี route นี้ ไม่ใช่ 403 ซึ่งเท่ากับประกาศว่ามีอยู่
+      if (!cfg.imagePaste) { res.writeHead(404).end('not found'); return; }
+      // เกณฑ์ origin ต่างจาก /api/login โดยตั้งใจ: endpoint นี้มีแต่เบราว์เซอร์เรียก
+      // จึงมี Origin เสมอ ไม่ต้องผ่อนให้ curl แบบที่ login ต้องทำ
+      if (!originAllowed(req.headers.origin)) { res.writeHead(403).end('forbidden'); return; }
+      if (!sessionValid(req)) { res.writeHead(401).end('unauthorized'); return; }
+
+      // เช็ค content-length ก่อนเสมอ ไม่ใช่พึ่งด่านสตรีมอย่างเดียว — ด่านนั้นต้อง
+      // `destroy()` ซึ่งตัดการเชื่อมต่อทิ้งก่อนที่ 413 จะออกไปถึง client
+      // เบราว์เซอร์ที่ส่ง Blob แนบ content-length มาเสมอ จึงได้เหตุผลที่อ่านออก
+      // ส่วนด่านสตรีมยังต้องมีไว้เป็นตาข่ายกับ client ที่ส่งแบบ chunked หรือโกหกความยาว
+      const declared = Number(req.headers['content-length']);
+      if (Number.isFinite(declared) && declared > MAX_IMAGE_BYTES) {
+        // ต้องรอให้ response ออกไปจริงก่อนค่อยตัดสาย — `destroy()` ทันทีจะกิน
+        // 413 ที่ยังค้างอยู่ใน buffer ทิ้ง แล้ว client เห็นแค่ "การเชื่อมต่อขาด"
+        // ซึ่งแปลไม่ได้ว่าเกิดอะไรขึ้น (curl รายงานเป็น 100 เพราะมันใช้
+        // Expect: 100-continue กับ body ใหญ่)
+        res.on('finish', () => req.destroy());
+        res.writeHead(413).end('too-large');
+        return;
+      }
+
+      let bytes: Buffer;
+      try {
+        bytes = await readImageBody(req, MAX_IMAGE_BYTES);
+      } catch {
+        // ถึงตรงนี้ socket ถูก destroy ไปแล้ว การเขียน response เป็น no-op
+        // แต่เขียนไว้เพื่อไม่ให้ request ค้างในกรณีที่ stream จบด้วยเหตุอื่น
+        res.writeHead(413).end('too-large');
+        return;
+      }
+
+      const kind = sniffImageKind(bytes);
+      // HEIC แยกจาก "ไม่ใช่รูป" เพราะผู้ใช้แก้ได้คนละวิธี — นี่คือรูปแบบที่ iPhone
+      // ยื่นมาโดยดีฟอลต์ และปลายทางทั้งสองตัวอ่านไม่ออกแล้วเงียบ
+      if (kind === 'heic') { res.writeHead(415).end('heic'); return; }
+      if (kind === null) { res.writeHead(415).end('not-image'); return; }
+
+      try {
+        const staged = await stageImage(cfg.imageDir, bytes, kind);
+        res.writeHead(200, { 'content-type': 'application/json' })
+          .end(JSON.stringify({ path: staged.path }));
+      } catch (err) {
+        console.error('เขียนรูปที่วางไม่สำเร็จ:', err);
+        res.writeHead(500).end('stage-failed');
+      }
       return;
     }
 

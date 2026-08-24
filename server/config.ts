@@ -1,3 +1,6 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 export interface Config {
   password: string;
   sessionSecret: string;
@@ -16,6 +19,10 @@ export interface Config {
   sessionTtlMs: number;
   /** ไฟล์เก็บตัวนับ epoch ที่ทำให้ logout เพิกถอน session ได้จริง */
   epochFile: string;
+  /** เปิด `POST /api/image` หรือไม่ — ปิดแล้ว endpoint ตอบ 404 เหมือนไม่มีอยู่ */
+  imagePaste: boolean;
+  /** ที่เก็บรูปที่ผู้ใช้วางเข้ามา ก่อนส่ง path ให้ agent อ่าน */
+  imageDir: string;
 }
 
 /** ค่าใน .env.example ที่ต้องไม่หลุดไปอยู่ในเครื่องจริง */
@@ -98,6 +105,22 @@ function checkSecret(env: NodeJS.ProcessEnv, key: string, minLen: number): strin
   return v;
 }
 
+/**
+ * ค่าตั้งต้นอยู่ใต้ `$HOME` ไม่ใช่ `$TMPDIR` โดยตั้งใจ
+ *
+ * process ที่เขียนไฟล์ (browser-console.service) กับ process ที่อ่าน (pane ซึ่งเป็น
+ * ลูกของ herdr-server.service) อยู่คนละ systemd unit วันนี้ทั้งคู่เห็น /tmp เดียวกัน
+ * เพราะไม่มีใครตั้ง PrivateTmp= แต่นั่นเป็นสมมติฐานที่ไม่มีใครเขียนห้ามไว้ —
+ * ใครมา hardening แล้วเติม PrivateTmp=yes ให้ unit ใดหน่วยหนึ่ง ฟีเจอร์นี้จะพัง
+ * แบบหาสาเหตุยากมาก: อัปโหลดสำเร็จ path โผล่ที่ prompt แต่ agent บอกว่าไม่มีไฟล์
+ *
+ * `%h` ของทั้งสอง unit เป็นผู้ใช้เดียวกันเสมอ $HOME จึงไม่มีปัญหานั้น
+ */
+function defaultImageDir(env: NodeJS.ProcessEnv): string {
+  const home = env.HOME || homedir();
+  return join(home, '.cache', 'browser-console', 'images');
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const password = checkSecret(env, 'CONSOLE_PASSWORD', MIN_PASSWORD_LEN);
   const sessionSecret = checkSecret(env, 'SESSION_SECRET', MIN_SECRET_LEN);
@@ -137,5 +160,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     trustProxy: !!env.TRUST_PROXY,
     sessionTtlMs: parseDays(env.SESSION_TTL_DAYS, 30) * 24 * 3_600_000,
     epochFile: env.SESSION_EPOCH_FILE || '.session-epoch',
+    imagePaste: env.IMAGE_PASTE !== '0',
+    imageDir: env.IMAGE_DIR?.trim() || defaultImageDir(env),
   };
 }

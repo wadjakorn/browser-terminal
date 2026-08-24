@@ -84,3 +84,17 @@ README, คอมเมนต์ในโค้ด, ข้อความ error 
   `'idle'` / `'off'` ไม่มีเทสตรง ถ้ามีใครลบบรรทัดที่เขียนค่าพวกนี้ทิ้ง เทสยังเขียว
 - **`beginHandleDrag()` ไม่มียาม `!modeActive`** — ตอนนี้ไม่มีปัญหาเพราะ `setMode()`
   ล้าง block เสมอ แต่เป็น invariant ที่ต้องไปอ่านอีกฟังก์ชันถึงจะรู้
+
+## แนบรูป (image paste)
+
+- ทดสอบบน iPhone จริงว่า `accept="image/png,image/jpeg,…"` ทำให้ iOS แปลง HEIC เป็น
+  JPEG ให้หรือไม่ · ถ้าไม่ ต้อง re-encode ฝั่งเบราว์เซอร์ด้วย `createImageBitmap()` +
+  `OffscreenCanvas.convertToBlob()` ก่อนอัปโหลด
+- ยืนยันว่า `ClipboardEvent` ให้รูปบน iOS Safari / Android Chrome ได้จริงไหม —
+  ตอนนี้ปุ่ม `▣` เป็นทางหลัก และ paste เป็นของแถมที่อาจไม่ทำงานบนมือถือ
+- รองรับ drag & drop บนเดสก์ท็อป (โค้ดอ่าน `DataTransfer` อยู่แล้ว เหลือแค่ผูก event)
+- ทดสอบว่าเกิดอะไรขึ้นเมื่อวาง path ขณะ herdr อยู่ใน copy mode — ตอนนี้ยอมรับว่า
+  ตัวอักษรจะถูกตีความเป็นคำสั่ง และบอกผู้ใช้ด้วย toast ที่แสดง path ที่วางไป
+- เมื่อ `SHELL_CMD=herdr` อาจใช้ `herdr pane send-text` แทน `term.paste()` เพื่อ
+  กำจัดปัญหาโหมด/โฟกัสทั้งหมด — ต้องหาวิธีระบุ pane ที่โฟกัสจากนอก pane ก่อน
+- แนบหลายรูปในครั้งเดียว

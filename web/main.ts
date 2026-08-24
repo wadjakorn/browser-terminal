@@ -17,6 +17,12 @@ import { createTextSelection, selectionMouseInit, type TerminalPort } from './te
 import { createSelectionSheet } from './selection-sheet.js';
 import { createSelectionHandles, CONFIRM_BAR_HEIGHT_PX, type PlacementLimits } from './selection-handles.js';
 import { createClipboard } from './clipboard.js';
+import {
+  ACCEPTED_IMAGE_TYPES,
+  createImageAttacher,
+  imageFromClipboard,
+  messageFor,
+} from './image-attach.js';
 import { loadSelectionPrefs } from './selection-prefs.js';
 import { createFullscreenController } from './fullscreen.js';
 import { createLinkOpener, type LinkOpener } from './links.js';
@@ -40,6 +46,7 @@ let selection: ReturnType<typeof createTextSelection> | null = null;
  */
 let stopGestures: (() => void) | null = null;
 const clipboard = createClipboard();
+const attachImage = createImageAttacher();
 const fullscreen = createFullscreenController(document);
 
 let term: Terminal | null = null;
@@ -115,6 +122,18 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   t.loadAddon(fit);
   t.open($('terminal'));
 
+  // capture phase ไม่ใช่ bubble — `handlePasteEvent` ของ xterm อ่านแค่ `text/plain`
+  // แล้วเรียก stopPropagation() ทิ้ง listener ที่ผูกแบบ bubble จึงไม่มีวันถูกเรียก
+  // เมื่อผู้ใช้วางรูป
+  $('terminal').addEventListener('paste', event => {
+    const file = imageFromClipboard((event as ClipboardEvent).clipboardData);
+    // ไม่ใช่รูป = ปล่อยผ่านให้ xterm จัดการข้อความตามเดิม ห้ามกลืน
+    if (!file) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void sendImage(t, file);
+  }, { capture: true });
+
   let terminalFocusState = initialTerminalFocusState();
   const terminalFocusPort = {
     textarea: t.textarea,
@@ -147,6 +166,7 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     onKey: key => pipeline.onBarKey(key),
     onAction: action => {
       if (action === 'select-mode') selection?.toggle();
+      else if (action === 'attach-image') pickImage();
       else void doPaste(t);
     },
     actionState: action => action === 'select-mode' && (selection?.active() ?? false),
@@ -676,6 +696,58 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     recognizer.onTouchCancel();
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
   };
+}
+
+/**
+ * แนบรูปเข้า prompt ของ agent
+ *
+ * ต้องผ่าน `term.paste()` เท่านั้น ไม่ใช่ส่งไบต์เอง — ทดสอบแล้วว่า path ที่ถูก
+ * *พิมพ์* เข้าไปเฉยๆ Claude Code ไม่แปลงเป็นรูปให้ มันต้องมาในรูป bracketed paste
+ * ซึ่ง xterm ห่อให้ตามโหมด 2004 ที่แอปข้างในขอไว้
+ *
+ * วาง path เปล่าล้วน ไม่มีช่องว่างต่อท้าย ไม่มี newline — รูปแบบนี้คือรูปแบบเดียว
+ * ที่ทดสอบผ่านทั้ง Claude Code และ Codex และ newline จะกลายเป็นการกด submit
+ * แทนผู้ใช้ ซึ่งไม่ใช่สิ่งที่ใครขอ
+ */
+async function sendImage(t: Terminal, blob: Blob): Promise<void> {
+  // เช็คก่อนอัปโหลด ไม่ใช่หลัง — `send` ของ pipeline ทิ้งไบต์เงียบเมื่อ socket ไม่ open
+  // ผู้ใช้จะเห็นแค่ "สำเร็จ" แล้วไม่มีอะไรโผล่ที่ prompt ซึ่งบนมือถือเกิดบ่อยมาก
+  if (ws?.readyState !== WebSocket.OPEN) {
+    showStatus('ยังไม่ได้เชื่อมต่อ — รอสักครู่แล้วลองใหม่');
+    return;
+  }
+
+  showStatus('กำลังส่งรูป…');
+  const result = await attachImage(blob);
+  if (!result.ok) { showStatus(messageFor(result.reason)); return; }
+
+  if (selection?.active()) selection.cancel();
+  t.paste(result.path);
+  showStatus(`แนบรูปแล้ว: ${result.path}`);
+}
+
+/**
+ * เลือกรูปจากเครื่อง — ทางหลักบนมือถือ ไม่ใช่ทางสำรอง
+ *
+ * paste event บน iOS Safari / Android Chrome ยังยืนยันไม่ได้ว่าใช้ได้จริง
+ * แต่ file input ทำงานแน่นอนทุกที่ และบนมือถือมันเปิดทั้ง "ถ่ายรูป" และ "เลือกจากคลัง" ให้เอง
+ *
+ * `accept` ไม่ใช่ `image/*` โดยตั้งใจ — iPhone จะยื่นไฟล์ HEIC มาซึ่งทั้ง Claude Code
+ * และ Codex อ่านไม่ออกแล้วล้มเหลวเงียบที่ปลายทาง การจำกัดรายการช่วยให้ iOS แปลงให้
+ * ก่อนส่ง (และถ้ามันไม่แปลง server จะปฏิเสธพร้อมเหตุผลอยู่ดี)
+ */
+function pickImage(): void {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = ACCEPTED_IMAGE_TYPES;
+  input.hidden = true;
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    input.remove();
+    if (file && term) void sendImage(term, file);
+  }, { once: true });
+  document.body.append(input);
+  input.click();
 }
 
 /**

@@ -8,7 +8,7 @@ export type KeyCategory = 'core' | 'navigation' | 'editing' | 'symbols' | 'funct
  * แยกออกจาก BarKey โดยตั้งใจ: BarKey คือเส้นทางไบต์ที่ถือว่า security-critical
  * มันไม่ควรรู้จักโหมดของ UI เลย ปุ่มที่มี action จะไม่ผ่าน input-pipeline
  */
-export type KeyAction = 'select-mode' | 'paste';
+export type KeyAction = 'select-mode' | 'paste' | 'attach-image';
 export type KeyUtility = 'settings' | 'fullscreen';
 
 export interface KeySpec {
@@ -109,6 +109,10 @@ export const KEY_CATALOG: readonly KeySpec[] = [
   {
     id: 'paste', label: '⎘', title: 'Paste from clipboard', category: 'core',
     action: 'paste', defaultVisible: true, defaultOrder: 117,
+  },
+  {
+    id: 'attach-image', label: '▣', title: 'Attach image — send a picture to the agent',
+    category: 'core', action: 'attach-image', defaultVisible: true, defaultOrder: 117.5,
   },
   {
     id: 'settings', label: '⚙', title: 'Customize terminal keys', category: 'core',

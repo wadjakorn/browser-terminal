@@ -28,21 +28,21 @@ describe('keybar preferences', () => {
   it('starts from the legacy quick-row defaults', () => {
     expect(defaultKeybarPreferences()).toEqual({
       version: 1,
-      order: expect.arrayContaining(['esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'shift-tab', 'shift', 'alt', 'interrupt', 'enter', 'select', 'paste', 'pipe', 'tilde', 'slash', 'dash', 'page-up', 'delete', 'f12', 'ctrl-z']),
+      order: expect.arrayContaining(['esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right', 'shift-tab', 'shift', 'alt', 'interrupt', 'enter', 'select', 'paste', 'attach-image', 'pipe', 'tilde', 'slash', 'dash', 'page-up', 'delete', 'f12', 'ctrl-z']),
       hidden: expect.arrayContaining(['page-up', 'delete', 'f12', 'ctrl-z']),
     });
-    expect(visibleKeyIds(defaultKeybarPreferences()).slice(0, 20)).toEqual([
+    expect(visibleKeyIds(defaultKeybarPreferences()).slice(0, 21)).toEqual([
       'esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
-      'shift-tab', 'shift', 'alt', 'interrupt', 'enter', 'select', 'paste', 'settings', 'fullscreen',
-      'pipe', 'tilde', 'slash', 'dash',
+      'shift-tab', 'shift', 'alt', 'interrupt', 'enter', 'select', 'paste', 'attach-image',
+      'settings', 'fullscreen', 'pipe', 'tilde', 'slash', 'dash',
     ]);
   });
 
   it('adds the expanded settings and fullscreen tools to the sortable order', () => {
     const preferences = defaultKeybarPreferences();
 
-    expect(preferences.order.slice(14, 20)).toEqual([
-      'settings', 'fullscreen', 'pipe', 'tilde', 'slash', 'dash',
+    expect(preferences.order.slice(14, 21)).toEqual([
+      'attach-image', 'settings', 'fullscreen', 'pipe', 'tilde', 'slash', 'dash',
     ]);
     expect(visibleKeyIds(preferences)).toEqual(expect.arrayContaining(['settings', 'fullscreen']));
   });

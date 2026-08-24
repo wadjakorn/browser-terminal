@@ -14,14 +14,14 @@ describe('key catalog', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(DEFAULT_KEY_IDS).toEqual([
       'esc', 'tab', 'ctrl', 'arrow-up', 'arrow-down', 'arrow-left', 'arrow-right',
-      'shift-tab', 'shift', 'alt', 'interrupt', 'enter', 'select', 'paste', 'settings', 'fullscreen',
-      'pipe', 'tilde', 'slash', 'dash',
+      'shift-tab', 'shift', 'alt', 'interrupt', 'enter', 'select', 'paste', 'attach-image',
+      'settings', 'fullscreen', 'pipe', 'tilde', 'slash', 'dash',
     ]);
     expect(ALL_KEY_IDS.slice(0, DEFAULT_KEY_IDS.length)).toEqual(DEFAULT_KEY_IDS);
     expect(ALL_KEY_IDS).toEqual(KEY_CATALOG.map(key => key.id));
     expect(resolveKeySpecs(DEFAULT_KEY_IDS).map(key => key.label)).toEqual([
       'Esc', 'Tab', 'Ctrl', '↑', '↓', '←', '→', 'Shift Tab', 'Shift',
-      'Alt', '^C', '⏎', '⧉', '⎘', '⚙', '⛶', '|', '~', '/', '-',
+      'Alt', '^C', '⏎', '⧉', '⎘', '▣', '⚙', '⛶', '|', '~', '/', '-',
     ]);
   });
 

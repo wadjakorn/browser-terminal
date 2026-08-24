@@ -9,3 +9,6 @@ web/dist/
 .session-epoch
 .claude/worktrees/
 .playwright-mcp/
+
+# symlink ชั่วคราวตอนพัฒนาใน worktree
+node_modules

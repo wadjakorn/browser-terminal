@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebSocket } from 'ws';
 import { createServer, cookieHeader } from './index.js';
 import { signSession } from './auth.js';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,8 @@ const cfg = {
   trustProxy: false,
   sessionTtlMs: 30 * 24 * 3_600_000,
   epochFile: join(mkdtempSync(join(tmpdir(), 'bc-test-')), 'epoch'),
+  imagePaste: true,
+  imageDir: join(mkdtempSync(join(tmpdir(), 'bc-test-images-'))),
 };
 
 const PORT = 7345;
@@ -326,5 +328,77 @@ describe('การบีบอัด WebSocket', () => {
     ws.send(Buffer.alloc(300 * 1024, 'x')); // เกิน MAX_INBOUND_PAYLOAD (256 KB) ใน index.ts
     const code = await closed;
     expect(code).toBe(1009); // ws ปิดด้วย "Message Too Big" ตาม maxPayload
+  });
+});
+
+describe('POST /api/image', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  const HEIC = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypheic')]);
+
+  const upload = (body: Buffer, headers: Record<string, string>) =>
+    fetch(`${base}/api/image`, { method: 'POST', headers, body });
+
+  const authed = (body: Buffer) =>
+    upload(body, { origin: ORIGIN, cookie: goodCookie(), 'content-type': 'image/png' });
+
+  it('ไม่มี session ได้ 401', async () => {
+    expect((await upload(PNG, { origin: ORIGIN })).status).toBe(401);
+  });
+
+  it('origin ผิดได้ 403 และต้องถูกปฏิเสธก่อนเช็ค session', async () => {
+    const res = await upload(PNG, { origin: 'https://evil.example', cookie: goodCookie() });
+    expect(res.status).toBe(403);
+  });
+
+  it('ไม่มี origin ได้ 403 — ต่างจาก /api/login ที่ผ่อนให้ curl', async () => {
+    expect((await upload(PNG, { cookie: goodCookie() })).status).toBe(403);
+  });
+
+  it('รูปที่ถูกต้องได้ path ที่มีอยู่จริง สิทธิ์ 0600 และไม่มีช่องว่างในชื่อ', async () => {
+    const res = await authed(PNG);
+    expect(res.status).toBe(200);
+    const { path } = await res.json() as { path: string };
+    expect(path).not.toMatch(/\s/);
+    expect(readFileSync(path)).toEqual(PNG);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it('HEIC ได้ 415 พร้อมเหตุผลที่แยกจาก "ไม่ใช่รูป" — iPhone ยื่นแบบนี้มา', async () => {
+    const res = await authed(HEIC);
+    expect(res.status).toBe(415);
+    expect(await res.text()).toBe('heic');
+  });
+
+  it('ไบต์ที่ไม่ใช่รูปได้ 415 และไม่เขียนไฟล์', async () => {
+    const before = readdirSync(cfg.imageDir).length;
+    const res = await authed(Buffer.from('#!/bin/sh\nrm -rf /'));
+    expect(res.status).toBe(415);
+    expect(await res.text()).toBe('not-image');
+    expect(readdirSync(cfg.imageDir).length).toBe(before);
+  });
+
+  it('รูปใหญ่เกินได้ 413 ที่อ่านออก ไม่ใช่การตัดสายทิ้งเฉยๆ', async () => {
+    const before = readdirSync(cfg.imageDir).length;
+    const res = await upload(Buffer.alloc(17 * 1024 * 1024), {
+      origin: ORIGIN, cookie: goodCookie(), 'content-type': 'image/png',
+    });
+    expect(res.status).toBe(413);
+    expect(await res.text()).toBe('too-large');
+    expect(readdirSync(cfg.imageDir).length).toBe(before);
+  });
+
+  it('ปิดด้วยคอนฟิกแล้วตอบ 404 ไม่ใช่ 403 — ไม่ประกาศว่ามี endpoint นี้อยู่', async () => {
+    const off = createServer({ ...cfg, imagePaste: false });
+    await off.listen(PORT + 1);
+    try {
+      const res = await fetch(`http://127.0.0.1:${PORT + 1}/api/image`, {
+        method: 'POST',
+        headers: { origin: ORIGIN, cookie: goodCookie() },
+        body: PNG,
+      });
+      expect(res.status).toBe(404);
+    } finally {
+      await off.close();
+    }
   });
 });

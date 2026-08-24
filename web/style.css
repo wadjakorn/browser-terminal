@@ -3,7 +3,6 @@
   --fg: #d8d8e0;
   --accent: #6ea8fe;
   --visible-height: 100dvh;
-  --keyboard-inset: 0px;
 }
 
 * { box-sizing: border-box; }

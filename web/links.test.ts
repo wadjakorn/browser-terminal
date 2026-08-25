@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createLinkOpener, findUrlAt, isOpenableUrl, type LinkTerminalPort } from './links.js';
+import { cellChar, createLinkOpener, findUrlAt, isOpenableUrl, type LinkTerminalPort } from './links.js';
 
 describe('isOpenableUrl', () => {
   it('รับ http และ https', () => {
@@ -45,14 +45,20 @@ function toCells(text: string): string[] {
   return cells;
 }
 
-function fakePort(rightPane: string[], sidebar?: string[]): LinkTerminalPort {
+/**
+ * `blank` คือสิ่งที่ `readCell()` คืนเมื่อเซลล์ว่าง
+ *
+ * xterm ของจริงคืน `''` ทั้งเซลล์ว่างและครึ่งขวาของอักษรกว้าง เทสจึงต้องยิงทั้งสอง
+ * แบบ ไม่งั้นบั๊กที่แยกสองกรณีนี้ไม่ออกจะรอดเทสไปได้ (เคยเกิดมาแล้ว)
+ */
+function fakePort(rightPane: string[], sidebar?: string[], blank = ' '): LinkTerminalPort {
   const PANE_W = 20;
   const COLUMNS = 31;
   const rows = rightPane.map((text, i) => {
     const side = toCells(sidebar?.[i] ?? 'side').slice(0, 10);
-    while (side.length < 10) side.push(' ');
+    while (side.length < 10) side.push(blank);
     const pane = toCells(text).slice(0, PANE_W);
-    while (pane.length < PANE_W) pane.push(' ');
+    while (pane.length < PANE_W) pane.push(blank);
     return [...side, '│', ...pane];
   });
   return {
@@ -64,6 +70,27 @@ function fakePort(rightPane: string[], sidebar?: string[]): LinkTerminalPort {
 }
 
 const URL = 'https://example.com/projects/la-moon/conversations/17637d2b-d95f';
+
+/**
+ * regression ที่หลุดขึ้น production มาแล้ว: `getChars()` คืน `''` ทั้งเซลล์ว่างและ
+ * ครึ่งขวาของอักษรกว้าง พอแยกไม่ออก ช่องว่างท้ายแถวถูกนับเป็นเนื้อหา ทุกแถวเลยดู
+ * "เต็มขอบเพน" แล้วต่อบรรทัดมั่ว จนแตะลิงก์ไม่ติดเลยสักอัน
+ */
+describe('cellChar', () => {
+  it("เซลล์ว่าง (width 1, chars '') เป็นช่องว่าง ไม่ใช่ครึ่งขวาของอักษรกว้าง", () => {
+    expect(cellChar('', 1)).toBe(' ');
+  });
+
+  it("ครึ่งขวาของอักษรกว้าง (width 0) คืน '' ไว้ให้ผู้เรียกรู้ว่าไม่ใช่คอลัมน์ใหม่", () => {
+    expect(cellChar('', 0)).toBe('');
+  });
+
+  it('เซลล์ที่มีตัวอักษรคืนตามเดิม รวมสระไทยที่อยู่เซลล์เดียวกัน', () => {
+    expect(cellChar('a', 1)).toBe('a');
+    expect(cellChar('漢', 2)).toBe('漢');
+    expect(cellChar('ที', 1)).toBe('ที');
+  });
+});
 
 describe('findUrlAt', () => {
   it('หา URL ที่อยู่ครบในแถวเดียวได้', () => {

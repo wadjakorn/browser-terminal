@@ -69,12 +69,24 @@ export function isOpenableUrl(text: string): boolean {
   }
 }
 
+/**
+ * ตัวอักษรของเซลล์หนึ่งช่อง จาก `getChars()` + `getWidth()` ของ xterm
+ *
+ * `getChars()` คืน `''` ทั้งเซลล์ว่างและครึ่งขวาของอักษรกว้าง แยกกันไม่ออกถ้าไม่ดู
+ * ความกว้าง (ครึ่งขวามี `width === 0`) และการแยกไม่ออกนี่แหละที่เคยทำให้ทุกแถวที่มี
+ * เนื้อหาดู "เต็มขอบเพน" จนต่อบรรทัดมั่วไปทั้งจอ แล้วแตะลิงก์ไม่ติดเลยสักอัน
+ */
+export function cellChar(chars: string, width: number): string {
+  if (width === 0) return '';
+  return chars === '' ? ' ' : chars;
+}
+
 /** ส่วนของ `TerminalPort` ที่โมดูลนี้ใช้ — รับแคบไว้เพื่อให้เทสสร้าง port ปลอมได้ง่าย */
 export interface LinkTerminalPort {
   rows: number;
   columns: number;
   viewportTop(): number;
-  /** คืน `''` เมื่อเป็นครึ่งขวาของอักษรกว้าง — ตรงตามสัญญาของ xterm */
+  /** คืน `''` **เฉพาะ** ครึ่งขวาของอักษรกว้าง เซลล์ว่างต้องเป็น `' '` — ดู `cellChar()` */
   readCell(line: number, column: number): string;
 }
 

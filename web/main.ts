@@ -26,7 +26,7 @@ import {
 } from './image-attach.js';
 import { loadSelectionPrefs } from './selection-prefs.js';
 import { createFullscreenController } from './fullscreen.js';
-import { createLinkOpener, type LinkOpener } from './links.js';
+import { cellChar, createLinkOpener, type LinkOpener } from './links.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -440,7 +440,12 @@ function createTerminalPort(t: Terminal, el: HTMLElement, target: HTMLElement): 
   // ใช้เซลล์ตัวเดียวซ้ำทั้งการสแกน: การตรวจเส้นแบ่งแตะราว rows × columns เซลล์
   // (~8,000 เซลล์บนจอแนวนอน) ทุกครั้งที่กดปุ่ม และ getCell ที่ไม่ส่ง target มาให้
   // จะสร้าง object ใหม่ทุกครั้ง
-  const scratch = { getChars: () => '' } as unknown as import('@xterm/xterm').IBufferCell;
+  //
+  // ห้ามใส่ object ปลอมเป็น target: `getCell(x, target)` ของ xterm เขียนแค่ฟิลด์
+  // ข้อมูลดิบลงไปแล้วคืน target ตัวเดิมกลับมา มันไม่ได้ให้เมธอดอะไรมาด้วย เซลล์
+  // ปลอมที่มี `getChars: () => ''` จึงคืนสตริงว่างตลอดกาล — เคยเป็นแบบนั้นอยู่จริง
+  // และไม่มีใครเห็น เพราะทุกอย่างที่ใช้งานจริงตอนนั้นอ่านผ่าน readLine() แทน
+  // ปล่อยให้ getCell สร้าง CellData จริงในครั้งแรก แล้วใช้ตัวนั้นซ้ำ
   let cell: import('@xterm/xterm').IBufferCell | undefined;
 
   const screenElement = (): HTMLElement =>
@@ -455,8 +460,10 @@ function createTerminalPort(t: Terminal, el: HTMLElement, target: HTMLElement): 
     readCell(line, column) {
       const bufferLine = t.buffer.active.getLine(line);
       if (!bufferLine) return '';
-      cell = bufferLine.getCell(column, cell ?? scratch);
-      return cell?.getChars() ?? '';
+      const read = bufferLine.getCell(column, cell);
+      if (!read) return '';
+      cell = read;
+      return cellChar(read.getChars(), read.getWidth());
     },
 
     // endColumn ของสัญญานี้เป็น inclusive ส่วนของ xterm เป็น exclusive

@@ -119,8 +119,22 @@ describe('findUrlAt', () => {
 
   it('หยุดต่อแถวเมื่อแถวก่อนหน้าไม่ได้เต็มถึงขอบเพน', () => {
     // แถว 0 มีที่ว่างท้ายแถว → แถว 1 เป็นคนละบรรทัดตรรกะ ห้ามต่อกัน
-    const port = fakePort(['tail-of-nothing', 'https://a.io/ok']);
-    expect(findUrlAt(port, 1, 12)).toBe('https://a.io/ok');
+    // แถวเส้นคั่นเป็นตัวบอกขอบขวาจริง ไม่งั้นบรรทัดสั้นจะกลายเป็นเกณฑ์เสียเอง
+    const port = fakePort(['─'.repeat(16), 'tail-of-nothing', 'https://a.io/ok']);
+    expect(findUrlAt(port, 2, 12)).toBe('https://a.io/ok');
+  });
+
+  it('ต่อบรรทัดได้แม้ TUI กันรางขวาไว้จนเนื้อหาไม่เคยชน pane.end — เคสจริงของ herdr', () => {
+    // herdr กันคอลัมน์ขวาไว้เป็นรางสกรอลบาร์ถาวร วัดของจริงได้ช่องโหว่ 4 คอลัมน์
+    // (เพน 26–101 เนื้อหาจบที่ 97) เกณฑ์ที่เทียบกับ pane.end จึงไม่เคยเป็นจริงเลย
+    const W = 16;                       // เนื้อหากว้างสุด 16 จากเพน 20
+    const rows = [
+      '─'.repeat(W),                    // เส้นคั่นคือสิ่งที่บอกว่าขอบขวาจริงอยู่ตรงไหน
+      URL.slice(0, W), URL.slice(W, 2 * W), URL.slice(2 * W, 3 * W), URL.slice(3 * W),
+    ];
+    const port = fakePort(rows);
+    expect(findUrlAt(port, 2, 11 + 5)).toBe(URL);
+    expect(findUrlAt(port, 1, 11 + 5)).toBe(URL);
   });
 
   it('คืน null เมื่อแตะข้อความธรรมดา', () => {

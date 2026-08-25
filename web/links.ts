@@ -31,6 +31,20 @@
  * ช่องว่างนั้นพอดี — อาการคือ "แตะแล้วได้ครึ่งเดียว" เฉพาะตอนลิงก์ยาวข้ามบรรทัด
  * bash ไม่มีอาการนี้เพราะมันหักบรรทัดที่คอลัมน์ 0 ไม่มีอะไรมาคั่น
  *
+ * ## ทำไมขอบขวาของเพนต้องหาจากเนื้อหา ไม่ใช่จากเส้นแบ่ง
+ *
+ * herdr กันคอลัมน์ขวาสุดของเพนไว้เป็นรางสกรอลบาร์ **ถาวร** (`stable_terminal_inner_rect`
+ * ใน `src/ui/panes.rs` คืน `width - 1` เสมอ ไม่ว่าจะมีสกรอลบาร์อยู่จริงหรือไม่ เพื่อ
+ * ไม่ให้ความกว้างกระโดดตอนสกรอลบาร์โผล่) แล้วยังมีขอบกับช่องว่างอีก วัดของจริงได้
+ * ช่องโหว่ 4 คอลัมน์: เพนอยู่คอลัมน์ 26–101 แต่เนื้อหาจบที่ 97 เสมอ
+ *
+ * เทียบ "เต็มถึง `pane.end`" จึงเป็น false ตลอดกาล — ไม่มีวันต่อบรรทัดเลยสักครั้ง
+ * และเส้นแบ่งก็ช่วยไม่ได้เพราะ herdr ไม่ได้วาดเส้นตรงขอบขวา มีแต่ช่องว่าง
+ *
+ * ทางออกคือวัดขอบขวาจากเนื้อหาบนจอเอง: คอลัมน์ที่ไกลสุดที่มีตัวอักษรอยู่ในช่วงเพนนี้
+ * TUI เต็มจอย่อมมีบรรทัดที่ชนขอบอยู่แล้ว (กรอบกล่อง เส้นคั่น แถบสถานะ) ค่าที่ได้จึง
+ * ตามความกว้างจริงของเทอร์มินัลใน pane โดยไม่ต้องรู้จัก chrome ของ TUI ตัวไหนเลย
+ *
  * ## ทำไมนับเป็นคอลัมน์ ไม่ใช่ตัวอักษร
  *
  * หนึ่งเซลล์ของเทอร์มินัลไม่เท่ากับหนึ่งอักขระ JS: อักษร CJK กินสองคอลัมน์แต่เป็น
@@ -149,13 +163,43 @@ function readRow(port: LinkTerminalPort, line: number, pane: PaneBounds): Row {
 }
 
 /**
+ * ขอบขวาจริงของเนื้อหาในเพนนี้ — คอลัมน์ที่ไกลสุดที่มีตัวอักษรอยู่ทั้งจอ
+ *
+ * ไล่จากขวาเข้ามาและหยุดทันทีที่เลย `best` ปัจจุบัน เพราะเราสนใจแค่ค่ามากสุด
+ * ต้นทุนจริงจึงต่ำกว่าการสแกนทั้งเพนมาก
+ */
+function paneContentEnd(port: LinkTerminalPort, pane: PaneBounds): number {
+  const top = port.viewportTop();
+  let best = pane.start - 1;
+  for (let row = 0; row < port.rows; row++) {
+    for (let column = pane.end; column > best; column--) {
+      const char = port.readCell(top + row, column);
+      if (char !== '' && char !== ' ' && !BORDER_CHARS.has(char)) { best = column; break; }
+    }
+  }
+  return best;
+}
+
+/**
+ * ขอบที่ใช้ตัดสินว่าแถว "ล้น" — ขอบจากเนื้อหา ถ้ามันดูน่าเชื่อพอ
+ *
+ * ถ้าเนื้อหากว้างสุดบนจอยังไม่ถึงครึ่งเพน แปลว่าไม่มีอะไรบนจอที่ wrap ที่ความกว้างนั้น
+ * อยู่แล้ว กลับไปใช้ `pane.end` ซึ่งเข้มกว่า ดีกว่าเอาบรรทัดสั้นๆ มาเป็นเกณฑ์แล้วต่อมั่ว
+ */
+function wrapColumn(port: LinkTerminalPort, pane: PaneBounds): number {
+  const contentEnd = paneContentEnd(port, pane);
+  const width = pane.end - pane.start + 1;
+  return contentEnd - pane.start + 1 >= Math.ceil(width * 0.6) ? contentEnd : pane.end;
+}
+
+/**
  * แถวนี้ "ล้นไปแถวถัดไป" หรือไม่
  *
- * เกณฑ์คือเนื้อหากินถึงคอลัมน์สุดท้ายของเพน ซึ่งเป็นร่องรอยเดียวที่เหลืออยู่ว่า TUI
- * ตัดบรรทัดตรงนั้น — herdr ลบข้อมูล soft wrap ทิ้งไปหมดแล้ว
+ * เกณฑ์คือเนื้อหากินถึงขอบขวาของเพน ซึ่งเป็นร่องรอยเดียวที่เหลืออยู่ว่า TUI ตัด
+ * บรรทัดตรงนั้น — herdr ลบข้อมูล soft wrap ทิ้งไปหมดแล้ว
  */
-function overflowsToNextRow(row: Row, pane: PaneBounds): boolean {
-  return row.lastColumn === pane.end;
+function overflowsToNextRow(row: Row, wrapAt: number): boolean {
+  return row.lastColumn === wrapAt;
 }
 
 /** ส่วนของหนึ่งแถวที่ถูกต่อเข้าไปในสตริงรวม */
@@ -164,6 +208,8 @@ interface Segment {
   row: Row;
   /** คอลัมน์แรกที่ถูกต่อเข้ามา — คอลัมน์ก่อนหน้านี้คือย่อหน้าที่ตัดทิ้ง */
   fromColumn: number;
+  /** คอลัมน์สุดท้ายที่ถูกต่อเข้ามา — เลยจากนี้คือรางที่ TUI กันไว้ ไม่ใช่เนื้อหา */
+  toColumn: number;
   /** offset ใน `joined` ของ `fromColumn` */
   base: number;
 }
@@ -185,11 +231,12 @@ export function findUrlAt(port: LinkTerminalPort, line: number, column: number):
   };
 
   // ขยายขึ้นบนตราบใดที่แถวก่อนหน้าล้นลงมา แล้วขยายลงล่างตราบใดที่แถวปัจจุบันล้นต่อ
+  const wrapAt = wrapColumn(port, pane);
   let first = line;
-  while (first - 1 >= 0 && overflowsToNextRow(rowAt(first - 1), pane)) first--;
+  while (first - 1 >= 0 && overflowsToNextRow(rowAt(first - 1), wrapAt)) first--;
   let last = line;
   const bottom = port.viewportTop() + port.rows;
-  while (last + 1 < bottom && overflowsToNextRow(rowAt(last), pane)) last++;
+  while (last + 1 < bottom && overflowsToNextRow(rowAt(last), wrapAt)) last++;
 
   // แถวแรกต่อทั้งแถว แถวต่อเนื่องตัดย่อหน้าทิ้งก่อน — URL ไม่มีช่องว่างในตัวอยู่แล้ว
   // จึงไม่มีทางตัดเนื้อ URL หายไป
@@ -197,11 +244,18 @@ export function findUrlAt(port: LinkTerminalPort, line: number, column: number):
   let joined = '';
   for (let l = first; l <= last; l++) {
     const row = rowAt(l);
-    const fromColumn = l === first ? pane.start : Math.max(pane.start, row.firstColumn);
     if (row.firstColumn < 0 && l !== first) continue;   // แถวว่างล้วน ไม่มีอะไรให้ต่อ
+    const fromColumn = l === first ? pane.start : Math.max(pane.start, row.firstColumn);
+
+    // แถวกลางต้องตัดที่ `wrapAt` ไม่ใช่ `pane.end` — คอลัมน์ที่ TUI กันไว้เป็นราง
+    // มีแต่ช่องว่าง ถ้าปล่อยติดมาจะไปแทรกกลาง URL แล้ว regex ตัดตรงนั้นพอดี
+    // แถวสุดท้ายเก็บถึงขอบเพนได้ เพราะช่องว่างท้ายลิงก์คือตัวจบลิงก์อยู่แล้ว
+    const toColumn = l === last ? pane.end : wrapAt;
     const dropped = row.offsetOf[fromColumn - pane.start] ?? 0;
-    segments.push({ line: l, row, fromColumn, base: joined.length });
-    joined += row.text.slice(dropped);
+    const cut = row.offsetOf[toColumn + 1 - pane.start] ?? row.text.length;
+
+    segments.push({ line: l, row, fromColumn, toColumn, base: joined.length });
+    joined += row.text.slice(dropped, cut);
   }
 
   const offset = offsetInJoined(segments, pane, line, column);
@@ -223,7 +277,7 @@ function offsetInJoined(
   column: number,
 ): number | null {
   const segment = segments.find(s => s.line === line);
-  if (!segment || column < segment.fromColumn || column > pane.end) return null;
+  if (!segment || column < segment.fromColumn || column > segment.toColumn) return null;
   const within = segment.row.offsetOf[column - pane.start];
   const dropped = segment.row.offsetOf[segment.fromColumn - pane.start] ?? 0;
   if (within === undefined) return null;

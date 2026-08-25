@@ -11,6 +11,15 @@ export type KeyCategory = 'core' | 'navigation' | 'editing' | 'symbols' | 'funct
 export type KeyAction = 'select-mode' | 'paste' | 'attach-image';
 export type KeyUtility = 'settings' | 'fullscreen';
 
+/**
+ * ไอคอนที่ CSS วาดเอง ไม่ใช่กลิฟ
+ *
+ * เหตุผลเดียวกับ chevron ของปุ่มลูกศร (ดู `.keybar-btn-arrow` ใน style.css):
+ * กลิฟรูปภาพในยูนิโค้ดไม่มีตัวไหนที่ทุกแพลตฟอร์มมีครบ บางเครื่องได้สี่เหลี่ยมเปล่า
+ * บางเครื่องเรนเดอร์เป็น emoji สีทับสีปุ่ม — ทุกที่ต้องได้ไอคอนหน้าตาเดียวกัน
+ */
+export type KeyGlyph = 'image';
+
 export interface KeySpec {
   id: string;
   label: string;
@@ -24,6 +33,8 @@ export interface KeySpec {
   utility?: KeyUtility;
   /** ปุ่มลูกศร — UI วาด chevron แทนกลิฟ ทิศทางนี้บอกว่าหมุนไปทางไหน */
   arrow?: 'up' | 'down' | 'left' | 'right';
+  /** ไอคอนที่ CSS วาดเอง — ตัว `label` ยังต้องมีไว้ให้ที่อื่นอ้างถึงปุ่มนี้ได้ */
+  glyph?: KeyGlyph;
   /** ปุ่มที่มีสถานะติด/ดับ — keybar จะถามสถานะมาทาสี */
   toggle?: boolean;
   defaultVisible: boolean;
@@ -111,7 +122,8 @@ export const KEY_CATALOG: readonly KeySpec[] = [
     action: 'paste', defaultVisible: true, defaultOrder: 117,
   },
   {
-    id: 'attach-image', label: '▣', title: 'Attach image — send a picture to the agent',
+    id: 'attach-image', label: 'Image', glyph: 'image',
+    title: 'Attach image — send a picture to the agent',
     category: 'core', action: 'attach-image', defaultVisible: true, defaultOrder: 117.5,
   },
   {

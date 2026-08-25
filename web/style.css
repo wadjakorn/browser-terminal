@@ -48,8 +48,26 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
 
 .status {
   padding: .4rem .75rem; background: #3a2a12; color: #ffd79a;
-  font-size: .85rem; text-align: center;
+  font-size: .85rem;
+  display: flex; align-items: center; gap: .5rem;
 }
+
+/*
+ * ข้อความกินพื้นที่ที่เหลือทั้งหมดแล้วจัดกึ่งกลางในตัวเอง ไม่ใช่ให้ทั้งแถบเป็น
+ * text-align: center — ไม่งั้นพอมีปุ่มปิด ข้อความจะเยื้องไปทางซ้ายตามความกว้างปุ่ม
+ */
+.status-text { flex: 1; min-width: 0; text-align: center; overflow-wrap: anywhere; }
+
+.status-close {
+  flex: none;
+  width: 1.5rem; height: 1.5rem;
+  display: grid; place-items: center;
+  padding: 0; border: 0; border-radius: .25rem;
+  background: rgba(255, 215, 154, .12); color: inherit;
+  font-size: 1rem; line-height: 1; cursor: pointer;
+}
+
+.status-close:active { background: rgba(255, 215, 154, .25); }
 
 .terminal {
   flex: 1; min-height: 0; padding: .25rem;
@@ -224,6 +242,55 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
 .keybar-btn[data-move="right"] .keybar-btn-label,
 .keybar-customize-key[data-move="right"] {
   transform: translateX(-.12rem) rotate(45deg);
+}
+
+/*
+ * ไอคอนรูปภาพ — กรอบ + ดวงอาทิตย์ + ภูเขา วาดด้วย CSS ล้วน
+ *
+ * เหตุผลเดียวกับ chevron ข้างบน: ไม่มีกลิฟรูปภาพตัวไหนในยูนิโค้ดที่ทุกแพลตฟอร์มมีครบ
+ * `▣` ที่เคยใช้ตอนแรกดูไม่ออกว่าเป็นรูปภาพ ส่วน emoji `🖼` เรนเดอร์เป็นสีทับสีปุ่ม
+ * และขนาดไม่เท่ากับปุ่มอื่นเลย
+ *
+ * ใช้ร่วมกันสองที่เหมือน chevron: ปุ่มจริงบนแถบ และตัวอย่างปุ่มในหน้า settings
+ */
+.keybar-btn[data-glyph="image"] .keybar-btn-label,
+.keybar-customize-key[data-glyph="image"] {
+  position: relative;
+  box-sizing: border-box;
+  width: 1.15rem;
+  height: .92rem;
+  font-size: 0;
+  border: .11rem solid currentColor;
+  border-radius: .14rem;
+  overflow: hidden;
+}
+
+/* ดวงอาทิตย์ */
+.keybar-btn[data-glyph="image"] .keybar-btn-label::before,
+.keybar-customize-key[data-glyph="image"]::before {
+  content: "";
+  position: absolute;
+  inset-block-start: .1rem;
+  inset-inline-start: .12rem;
+  width: .2rem;
+  height: .2rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/*
+ * ภูเขา — ต้องล้นออกนอกกรอบเล็กน้อยแล้วให้ overflow: hidden ตัด ไม่งั้นจะเห็น
+ * เส้นบางๆ ระหว่างฐานภูเขากับขอบล่างของกรอบบนจอความละเอียดสูง
+ */
+.keybar-btn[data-glyph="image"] .keybar-btn-label::after,
+.keybar-customize-key[data-glyph="image"]::after {
+  content: "";
+  position: absolute;
+  inset-inline: -.06rem;
+  inset-block-end: -.06rem;
+  height: .46rem;
+  background: currentColor;
+  clip-path: polygon(0 100%, 34% 26%, 58% 66%, 72% 48%, 100% 100%);
 }
 
 .keybar-strip.expanded .keybar-btn-arrow { touch-action: manipulation; }

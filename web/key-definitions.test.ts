@@ -21,7 +21,7 @@ describe('key catalog', () => {
     expect(ALL_KEY_IDS).toEqual(KEY_CATALOG.map(key => key.id));
     expect(resolveKeySpecs(DEFAULT_KEY_IDS).map(key => key.label)).toEqual([
       'Esc', 'Tab', 'Ctrl', '↑', '↓', '←', '→', 'Shift Tab', 'Shift',
-      'Alt', '^C', '⏎', '⧉', '⎘', '▣', '⚙', '⛶', '|', '~', '/', '-',
+      'Alt', '^C', '⏎', '⧉', '⎘', 'Image', '⚙', '⛶', '|', '~', '/', '-',
     ]);
   });
 
@@ -130,5 +130,22 @@ describe('expanded terminal key inventory', () => {
     expect(getKeySpec('ctrl-x')?.key).toEqual({ kind: 'literal', data: '\x18' });
     expect(getKeySpec('ctrl-r')?.key).toEqual({ kind: 'literal', data: '\x12' });
     expect(getKeySpec('ctrl-f')?.key).toEqual({ kind: 'literal', data: '\x06' });
+  });
+});
+
+describe('ปุ่มแนบรูป', () => {
+  const attach = KEY_CATALOG.find(key => key.id === 'attach-image')!;
+
+  it('ใช้ไอคอนที่ CSS วาด ไม่ใช่กลิฟยูนิโค้ด', () => {
+    // กลิฟรูปภาพไม่มีตัวไหนที่ทุกแพลตฟอร์มมีครบ บางเครื่องได้สี่เหลี่ยมเปล่า
+    // บางเครื่องเรนเดอร์เป็น emoji สี — เหตุผลเดียวกับ chevron ของปุ่มลูกศร
+    expect(attach.glyph).toBe('image');
+    expect(attach.label).toMatch(/^[\x20-\x7e]+$/);
+  });
+
+  it('ยังต้องมี label เป็นข้อความไว้ให้ที่อื่นอ้างถึงปุ่มนี้ได้', () => {
+    // หน้า settings ใช้ label ประกอบ aria-label ของปุ่มเลื่อนลำดับ ("Move X up")
+    expect(attach.label.trim()).not.toBe('');
+    expect(attach.title).toContain('image');
   });
 });

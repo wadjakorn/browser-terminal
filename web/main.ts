@@ -17,6 +17,7 @@ import { createTextSelection, selectionMouseInit, type TerminalPort } from './te
 import { createSelectionSheet } from './selection-sheet.js';
 import { createSelectionHandles, CONFIRM_BAR_HEIGHT_PX, type PlacementLimits } from './selection-handles.js';
 import { createClipboard } from './clipboard.js';
+import { TRANSIENT, createStatus, renderStatus } from './status.js';
 import {
   ACCEPTED_IMAGE_TYPES,
   createImageAttacher,
@@ -56,11 +57,15 @@ let backoffMs = 1000;
 let stopped = false;   // true เมื่อถูกเตะด้วย code 4000 — ห้าม reconnect
 let resetInputModifiers: () => void = () => {};
 
-function showStatus(text: string | null): void {
-  if (text === null) { statusEl.hidden = true; return; }
-  statusEl.textContent = text;
-  statusEl.hidden = false;
-}
+const status = createStatus({
+  render: view => renderStatus(statusEl, view, () => {
+    status.show(null);
+    // คืนโฟกัสให้ terminal เสมอ ไม่งั้นปุ่มปิดค้างโฟกัสไว้ แล้วคีย์ถัดไปที่ผู้ใช้กด
+    // จะไปเข้าปุ่มแทนที่จะเข้า terminal
+    term?.focus();
+  }),
+});
+const showStatus = status.show;
 
 /**
  * GET /api/session — แยกสามสถานะ ไม่ใช่ boolean
@@ -191,7 +196,7 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     onToggleFullscreen: () => {
       void fullscreen.toggle().then(result => {
         if (result === 'rejected') {
-          showStatus('เบราว์เซอร์ไม่อนุญาตให้เปิดเต็มหน้าจอ');
+          showStatus('เบราว์เซอร์ไม่อนุญาตให้เปิดเต็มหน้าจอ', TRANSIENT);
         }
       });
     },
@@ -713,17 +718,20 @@ async function sendImage(t: Terminal, blob: Blob): Promise<void> {
   // เช็คก่อนอัปโหลด ไม่ใช่หลัง — `send` ของ pipeline ทิ้งไบต์เงียบเมื่อ socket ไม่ open
   // ผู้ใช้จะเห็นแค่ "สำเร็จ" แล้วไม่มีอะไรโผล่ที่ prompt ซึ่งบนมือถือเกิดบ่อยมาก
   if (ws?.readyState !== WebSocket.OPEN) {
-    showStatus('ยังไม่ได้เชื่อมต่อ — รอสักครู่แล้วลองใหม่');
+    showStatus('ยังไม่ได้เชื่อมต่อ — รอสักครู่แล้วลองใหม่', TRANSIENT);
     return;
   }
 
   showStatus('กำลังส่งรูป…');
   const result = await attachImage(blob);
-  if (!result.ok) { showStatus(messageFor(result.reason)); return; }
+  if (!result.ok) { showStatus(messageFor(result.reason), TRANSIENT); return; }
 
   if (selection?.active()) selection.cancel();
   t.paste(result.path);
-  showStatus(`แนบรูปแล้ว: ${result.path}`);
+  // โชว์แค่ชื่อไฟล์ ไม่ใช่ path เต็ม — บนจอมือถือ path เต็มกินสองสามบรรทัดและเบียด
+  // terminal ส่วน path เต็มผู้ใช้เห็นอยู่แล้วที่ prompt เพราะนั่นคือสิ่งที่เพิ่งวางไป
+  const name = result.path.slice(result.path.lastIndexOf('/') + 1);
+  showStatus(`แนบรูปแล้ว: ${name}`, { ...TRANSIENT, title: result.path });
 }
 
 /**
@@ -766,7 +774,7 @@ async function doPaste(t: Terminal): Promise<void> {
 
   showStatus(result.reason === 'denied'
     ? 'ไม่ได้รับอนุญาตให้อ่านคลิปบอร์ด — ใช้ปุ่มวางของคีย์บอร์ดแทน'
-    : 'เบราว์เซอร์นี้อ่านคลิปบอร์ดไม่ได้ — ใช้ปุ่มวางของคีย์บอร์ดแทน');
+    : 'เบราว์เซอร์นี้อ่านคลิปบอร์ดไม่ได้ — ใช้ปุ่มวางของคีย์บอร์ดแทน', TRANSIENT);
 }
 
 /** รอ 1 เฟรมให้ layout settle ก่อนวัดขนาด */

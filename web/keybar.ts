@@ -274,6 +274,7 @@ export function mountKeybar(container: HTMLElement, handlers: {
     button.dataset.keyId = spec.id;
     button.dataset.category = spec.category;
     if (spec.arrow) button.dataset.move = spec.arrow;
+    if (spec.glyph) button.dataset.glyph = spec.glyph;
     if (repeatable) {
       button.classList.add('keybar-btn-arrow');
       cancelRenderedRepeats.push(bindPressRepeat(button, activate));
@@ -379,6 +380,7 @@ export function mountKeybar(container: HTMLElement, handlers: {
       const key = document.createElement('span');
       key.className = 'keybar-customize-key';
       if (spec.arrow) key.dataset.move = spec.arrow;
+      else if (spec.glyph) key.dataset.glyph = spec.glyph;
       else key.textContent = spec.shortLabel ?? spec.label;
 
       const label = document.createElement('span');

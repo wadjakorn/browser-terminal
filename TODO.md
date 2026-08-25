@@ -90,8 +90,13 @@ README, คอมเมนต์ในโค้ด, ข้อความ error 
 - ทดสอบบน iPhone จริงว่า `accept="image/png,image/jpeg,…"` ทำให้ iOS แปลง HEIC เป็น
   JPEG ให้หรือไม่ · ถ้าไม่ ต้อง re-encode ฝั่งเบราว์เซอร์ด้วย `createImageBitmap()` +
   `OffscreenCanvas.convertToBlob()` ก่อนอัปโหลด
-- ยืนยันว่า `ClipboardEvent` ให้รูปบน iOS Safari / Android Chrome ได้จริงไหม —
-  ตอนนี้ปุ่ม `▣` เป็นทางหลัก และ paste เป็นของแถมที่อาจไม่ทำงานบนมือถือ
+- ~~ยืนยันว่า `ClipboardEvent` ให้รูปบน Android Chrome ได้จริงไหม~~ — **ทดสอบแล้ว
+  2026-08-25 ใช้ได้จริง** ส่งรูป 3.9 MB จาก Galaxy Z Fold8 เข้า Claude Code สำเร็จ
+  และ Android ยื่น **JPEG** มา ไม่ใช่ HEIC · ยังเหลือ iOS Safari ที่ยังไม่ยืนยัน
+- หมุนรูปตาม EXIF orientation ก่อนอัปโหลด — รูปจากมือถือมักมี `orientation` ที่ไม่ใช่
+  ค่าปกติ (เคสที่ทดสอบเป็น `upper-right`) เราเก็บไบต์ดิบไว้ซึ่งถูกต้องแล้ว แต่ agent
+  ที่ไม่อ่าน EXIF จะเห็นรูปหมุน 90° ตลอด · แก้ด้วย `createImageBitmap(blob,
+  { imageOrientation: 'from-image' })` แล้ววาดลง canvas ก่อนส่ง
 - รองรับ drag & drop บนเดสก์ท็อป (โค้ดอ่าน `DataTransfer` อยู่แล้ว เหลือแค่ผูก event)
 - ทดสอบว่าเกิดอะไรขึ้นเมื่อวาง path ขณะ herdr อยู่ใน copy mode — ตอนนี้ยอมรับว่า
   ตัวอักษรจะถูกตีความเป็นคำสั่ง และบอกผู้ใช้ด้วย toast ที่แสดง path ที่วางไป

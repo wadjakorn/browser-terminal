@@ -22,19 +22,44 @@ describe('isOpenableUrl', () => {
 /**
  * จอจำลองแบบ herdr: sidebar ซ้ายกว้าง 10 เส้นแบ่งที่คอลัมน์ 10 เพนขวากว้าง 20
  * ทุกแถวยาวเท่ากันเสมอ เหมือนที่ herdr วาดจริง (มันยิง CUP ทุกเซลล์ ไม่เคย soft-wrap)
+ *
+ * แถวถูกแปลงเป็น "เซลล์" ก่อนเสมอ ไม่ใช่ดัชนีตัวอักษร เพราะหนึ่งเซลล์ของเทอร์มินัลไม่
+ * เท่ากับหนึ่งอักขระ JS: อักษร CJK กินสองคอลัมน์ (ครึ่งขวาอ่านได้ `''`) ส่วนสระและ
+ * วรรณยุกต์ไทยอยู่ในเซลล์เดียวกับพยัญชนะ นี่คือพฤติกรรมจริงของบัฟเฟอร์ xterm และเป็น
+ * เคสที่โค้ดเดิมพลาด
  */
+const WIDE = /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFF00-\uFF60]/;
+
+/** ข้อความ → เซลล์ เซลล์ละหนึ่งคอลัมน์ */
+function toCells(text: string): string[] {
+  const cells: string[] = [];
+  for (const char of text) {
+    // สระ/วรรณยุกต์เกาะเซลล์ก่อนหน้า ไม่กินคอลัมน์เพิ่ม
+    if (/\p{Mn}/u.test(char) && cells.length > 0) {
+      cells[cells.length - 1] += char;
+      continue;
+    }
+    cells.push(char);
+    if (WIDE.test(char)) cells.push('');   // ครึ่งขวาของอักษรกว้าง
+  }
+  return cells;
+}
+
 function fakePort(rightPane: string[], sidebar?: string[]): LinkTerminalPort {
   const PANE_W = 20;
+  const COLUMNS = 31;
   const rows = rightPane.map((text, i) => {
-    const side = (sidebar?.[i] ?? 'side').padEnd(10, ' ').slice(0, 10);
-    return side + '│' + text.padEnd(PANE_W, ' ').slice(0, PANE_W);
+    const side = toCells(sidebar?.[i] ?? 'side').slice(0, 10);
+    while (side.length < 10) side.push(' ');
+    const pane = toCells(text).slice(0, PANE_W);
+    while (pane.length < PANE_W) pane.push(' ');
+    return [...side, '│', ...pane];
   });
   return {
     rows: rows.length,
-    columns: 31,
+    columns: COLUMNS,
     viewportTop: () => 0,
     readCell: (line, column) => rows[line]?.[column] ?? '',
-    readLine: (line, start, end) => (rows[line] ?? '').slice(start, end + 1),
   };
 }
 
@@ -84,6 +109,42 @@ describe('findUrlAt', () => {
   it('ไม่กิน `)` ปิดท้ายที่ TUI ใส่มาเอง', () => {
     const port = fakePort(['(https://a.io/x)']);
     expect(findUrlAt(port, 0, 15)).toBe('https://a.io/x');
+  });
+
+  it('ต่อ URL ที่ Claude Code ตัด โดยข้ามย่อหน้าของบรรทัดต่อเนื่อง — เคสจริง', () => {
+    // Ink เขียนเต็มถึงคอลัมน์สุดท้ายแล้วขึ้นบรรทัดใหม่พร้อมย่อหน้า 2 ช่องเสมอ
+    const head = '  ' + URL.slice(0, 18);          // เต็ม 20 พอดี
+    const rows = [head, '  ' + URL.slice(18, 36), '  ' + URL.slice(36, 54), '  ' + URL.slice(54)];
+    const port = fakePort(rows);
+    expect(findUrlAt(port, 0, 11 + 5)).toBe(URL);   // แตะแถวแรก
+    expect(findUrlAt(port, 3, 11 + 5)).toBe(URL);   // แตะแถวสุดท้าย
+  });
+
+  it('ต่อบรรทัดได้แม้แถวนั้นมีอักษรกว้างหรือสระไทยปนอยู่', () => {
+    // 'ไทย' กินคอลัมน์เท่าจำนวนพยัญชนะ ส่วน '漢' กินสองคอลัมน์ — ทั้งคู่ทำให้
+    // ความยาวสตริงไม่เท่าจำนวนคอลัมน์ ซึ่งเป็นสิ่งที่เกณฑ์เดิมนับผิด
+    // '漢' 2 คอลัมน์ + ' ' + 'ที' 1 คอลัมน์ + ' ' = 5 คอลัมน์ เหลือ 15 ให้ URL พอดี 20
+    const rows = [
+      '漢 ที ' + URL.slice(0, 15),
+      '  ' + URL.slice(15, 33),
+      '  ' + URL.slice(33, 51),
+      '  ' + URL.slice(51),
+    ];
+    const port = fakePort(rows);
+    expect(findUrlAt(port, 1, 11 + 5)).toBe(URL);
+  });
+
+  it('แตะย่อหน้าของบรรทัดต่อเนื่อง = ไม่ใช่ลิงก์', () => {
+    const rows = ['  ' + URL.slice(0, 18), '  ' + URL.slice(18)];
+    expect(findUrlAt(fakePort(rows), 1, 11)).toBeNull();
+  });
+
+  it('ไม่ลากอักษรวาดกล่องเข้ามาใน URL', () => {
+    // URL ในกล่องผลลัพธ์: `│` ท้ายแถวต้องไม่กลายเป็นส่วนหนึ่งของลิงก์
+    const port = fakePort(['│ https://a.io/x  │']);
+    const found = findUrlAt(port, 0, 11 + 5);
+    expect(found).toBe('https://a.io/x');
+    expect(found).not.toContain('│');
   });
 
   it('ปฏิเสธ scheme อันตรายแม้ regex จะจับได้', () => {

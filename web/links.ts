@@ -24,6 +24,21 @@
  * `_handleMouseUp` ขึ้นต้นด้วย `if (!this._currentLink) return;` ลิงก์จึงไม่มีวัน
  * ถูก activate ด้วยการแตะ เราหา URL เองจากบัฟเฟอร์แล้วเปิดเองจึงตรงไปตรงมากว่า
  *
+ * ## ทำไมต้องตัดย่อหน้าของบรรทัดต่อเนื่องทิ้ง
+ *
+ * Claude Code (Ink) เขียนเต็มถึงคอลัมน์สุดท้ายแล้วขึ้นบรรทัดใหม่พร้อม **ย่อหน้า 2
+ * ช่อง** ทุกครั้ง ต่อแถวดิบจะได้ `…-tap-fi` + `␣␣x-plan.md` แล้ว regex ตัด URL ตรง
+ * ช่องว่างนั้นพอดี — อาการคือ "แตะแล้วได้ครึ่งเดียว" เฉพาะตอนลิงก์ยาวข้ามบรรทัด
+ * bash ไม่มีอาการนี้เพราะมันหักบรรทัดที่คอลัมน์ 0 ไม่มีอะไรมาคั่น
+ *
+ * ## ทำไมนับเป็นคอลัมน์ ไม่ใช่ตัวอักษร
+ *
+ * หนึ่งเซลล์ของเทอร์มินัลไม่เท่ากับหนึ่งอักขระ JS: อักษร CJK กินสองคอลัมน์แต่เป็น
+ * อักขระเดียว ส่วนสระและวรรณยุกต์ไทยเป็นหลายอักขระในเซลล์เดียว การเทียบ
+ * `text.length` กับความกว้างเพนจึงผิดทั้งสองทาง แล้วอาการที่ได้คือ "บางแถวก็ต่อ
+ * บรรทัดให้ บางแถวก็ไม่" โดยไม่มี error ให้เห็น เราจึงอ่านทีละเซลล์แล้วทำตาราง
+ * คอลัมน์ → offset ไว้เอง
+ *
  * ## ทำไมแตะโดนลิงก์แล้วไม่ส่งคลิกต่อ
  *
  * ผู้ใช้แตะเพราะอยากเปิดลิงก์ ถ้าส่งคลิกต่อ herdr จะสลับ pane เงียบๆ ตอนที่ผู้ใช้
@@ -32,6 +47,7 @@
  */
 
 import {
+  BORDER_CHARS,
   detectBorderColumns,
   panesFromBorders,
   paneContaining,
@@ -58,9 +74,8 @@ export interface LinkTerminalPort {
   rows: number;
   columns: number;
   viewportTop(): number;
+  /** คืน `''` เมื่อเป็นครึ่งขวาของอักษรกว้าง — ตรงตามสัญญาของ xterm */
   readCell(line: number, column: number): string;
-  /** endColumn เป็น inclusive */
-  readLine(line: number, startColumn: number, endColumn: number): string;
 }
 
 export interface Cell {
@@ -77,14 +92,68 @@ function paneAt(port: LinkTerminalPort, column: number): PaneBounds {
   return pane ?? { start: 0, end: port.columns - 1 };
 }
 
+/** แถวหนึ่งของเพน อ่านมาแล้วทีละเซลล์ */
+interface Row {
+  /** ข้อความของแถวหลังแปลงอักษรวาดกล่องเป็นช่องว่าง */
+  text: string;
+  /** offset ใน `text` ของแต่ละคอลัมน์ ดัชนีคือ `column - pane.start` */
+  offsetOf: number[];
+  /** คอลัมน์แรก/สุดท้ายที่มีเนื้อหา — `-1` เมื่อแถวว่าง */
+  firstColumn: number;
+  lastColumn: number;
+}
+
+/**
+ * อ่านหนึ่งแถวในช่วงคอลัมน์ของเพน
+ *
+ * อักษรวาดกล่องกลายเป็นช่องว่าง เพราะ `URL_PATTERN` ไม่ได้กัน `│` ไว้ ถ้าปล่อยไว้
+ * ลิงก์ในกล่องผลลัพธ์จะมีเส้นกรอบติดมาด้วย
+ */
+function readRow(port: LinkTerminalPort, line: number, pane: PaneBounds): Row {
+  let text = '';
+  const offsetOf: number[] = [];
+  let firstColumn = -1;
+  let lastColumn = -1;
+
+  for (let column = pane.start; column <= pane.end; column++) {
+    const raw = port.readCell(line, column);
+    if (raw === '') {
+      // ครึ่งขวาของอักษรกว้าง — ชี้ไป offset เดียวกับครึ่งซ้าย เพื่อให้แตะโดนครึ่งไหน
+      // ก็เจอตัวอักษรเดียวกัน และนับเป็นเนื้อหาถ้าครึ่งซ้ายเป็นเนื้อหา
+      offsetOf.push(offsetOf[offsetOf.length - 1] ?? 0);
+      if (lastColumn === column - 1) lastColumn = column;
+      continue;
+    }
+    const char = BORDER_CHARS.has(raw) ? ' ' : raw;
+    offsetOf.push(text.length);
+    text += char;
+    if (char !== ' ') {
+      if (firstColumn < 0) firstColumn = column;
+      lastColumn = column;
+    }
+  }
+
+  return { text, offsetOf, firstColumn, lastColumn };
+}
+
 /**
  * แถวนี้ "ล้นไปแถวถัดไป" หรือไม่
  *
- * เกณฑ์คือเนื้อหาเต็มถึงคอลัมน์สุดท้ายของเพนโดยไม่มีช่องว่างปิดท้าย ซึ่งเป็นร่องรอย
- * เดียวที่เหลืออยู่ว่า TUI ตัดบรรทัดตรงนั้น — herdr ลบข้อมูล soft wrap ทิ้งไปหมดแล้ว
+ * เกณฑ์คือเนื้อหากินถึงคอลัมน์สุดท้ายของเพน ซึ่งเป็นร่องรอยเดียวที่เหลืออยู่ว่า TUI
+ * ตัดบรรทัดตรงนั้น — herdr ลบข้อมูล soft wrap ทิ้งไปหมดแล้ว
  */
-function overflowsToNextRow(text: string, width: number): boolean {
-  return text.length === width && !/\s$/.test(text);
+function overflowsToNextRow(row: Row, pane: PaneBounds): boolean {
+  return row.lastColumn === pane.end;
+}
+
+/** ส่วนของหนึ่งแถวที่ถูกต่อเข้าไปในสตริงรวม */
+interface Segment {
+  line: number;
+  row: Row;
+  /** คอลัมน์แรกที่ถูกต่อเข้ามา — คอลัมน์ก่อนหน้านี้คือย่อหน้าที่ตัดทิ้ง */
+  fromColumn: number;
+  /** offset ใน `joined` ของ `fromColumn` */
+  base: number;
 }
 
 /**
@@ -94,21 +163,37 @@ function overflowsToNextRow(text: string, width: number): boolean {
  */
 export function findUrlAt(port: LinkTerminalPort, line: number, column: number): string | null {
   const pane = paneAt(port, column);
-  const width = pane.end - pane.start + 1;
-  if (width <= 0) return null;
+  if (pane.end < pane.start) return null;
 
-  const rowText = (l: number): string => port.readLine(l, pane.start, pane.end);
+  const cache = new Map<number, Row>();
+  const rowAt = (l: number): Row => {
+    let row = cache.get(l);
+    if (!row) { row = readRow(port, l, pane); cache.set(l, row); }
+    return row;
+  };
 
   // ขยายขึ้นบนตราบใดที่แถวก่อนหน้าล้นลงมา แล้วขยายลงล่างตราบใดที่แถวปัจจุบันล้นต่อ
   let first = line;
-  while (first - 1 >= 0 && overflowsToNextRow(rowText(first - 1), width)) first--;
+  while (first - 1 >= 0 && overflowsToNextRow(rowAt(first - 1), pane)) first--;
   let last = line;
-  while (last + 1 < port.viewportTop() + port.rows && overflowsToNextRow(rowText(last), width)) last++;
+  const bottom = port.viewportTop() + port.rows;
+  while (last + 1 < bottom && overflowsToNextRow(rowAt(last), pane)) last++;
 
+  // แถวแรกต่อทั้งแถว แถวต่อเนื่องตัดย่อหน้าทิ้งก่อน — URL ไม่มีช่องว่างในตัวอยู่แล้ว
+  // จึงไม่มีทางตัดเนื้อ URL หายไป
+  const segments: Segment[] = [];
   let joined = '';
-  for (let l = first; l <= last; l++) joined += rowText(l).padEnd(width, ' ');
+  for (let l = first; l <= last; l++) {
+    const row = rowAt(l);
+    const fromColumn = l === first ? pane.start : Math.max(pane.start, row.firstColumn);
+    if (row.firstColumn < 0 && l !== first) continue;   // แถวว่างล้วน ไม่มีอะไรให้ต่อ
+    const dropped = row.offsetOf[fromColumn - pane.start] ?? 0;
+    segments.push({ line: l, row, fromColumn, base: joined.length });
+    joined += row.text.slice(dropped);
+  }
 
-  const offset = (line - first) * width + (column - pane.start);
+  const offset = offsetInJoined(segments, pane, line, column);
+  if (offset === null) return null;
 
   URL_PATTERN.lastIndex = 0;
   for (let m = URL_PATTERN.exec(joined); m !== null; m = URL_PATTERN.exec(joined)) {
@@ -116,6 +201,21 @@ export function findUrlAt(port: LinkTerminalPort, line: number, column: number):
     return isOpenableUrl(m[0]) ? m[0] : null;
   }
   return null;
+}
+
+/** เซลล์ที่แตะ → offset ใน `joined` · `null` เมื่อแตะโดนย่อหน้าที่ถูกตัดทิ้ง */
+function offsetInJoined(
+  segments: Segment[],
+  pane: PaneBounds,
+  line: number,
+  column: number,
+): number | null {
+  const segment = segments.find(s => s.line === line);
+  if (!segment || column < segment.fromColumn || column > pane.end) return null;
+  const within = segment.row.offsetOf[column - pane.start];
+  const dropped = segment.row.offsetOf[segment.fromColumn - pane.start] ?? 0;
+  if (within === undefined) return null;
+  return segment.base + within - dropped;
 }
 
 export interface LinkOpenerDeps {

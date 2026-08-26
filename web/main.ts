@@ -109,6 +109,12 @@ function backToLogin(): void {
   appPage.hidden = true;
   loginPage.hidden = false;
   showStatus(null);
+  // ต้องบอกเหตุผลและพาโฟกัสไปที่ช่องรหัสด้วย ไม่ใช่แค่สลับหน้าเงียบๆ — จากมุมผู้ใช้
+  // จอ terminal หายไปเฉยๆ กลางคันโดยไม่มีใครบอกอะไร แยกไม่ออกเลยว่าแอปพังหรือ
+  // session หมดอายุ (ท่าเดียวกับกิ่ง 'expired' ใน tryResume())
+  noticeEl.textContent = 'เซสชันหมดอายุแล้ว — กรอกรหัสผ่านอีกครั้งเพื่อเข้าใช้งานต่อ';
+  noticeEl.hidden = false;
+  $<HTMLInputElement>('password').focus();
   // ต้องยกเลิก timer ที่ค้างอยู่ด้วย ไม่งั้น backoff เดิมจะยิง connect() ตอนผู้ใช้
   // นั่งอยู่หน้า login — connect() จะ return ทันทีเพราะ stopped แต่ backoff จะไม่ถูก reset
   reconnect.cancel();

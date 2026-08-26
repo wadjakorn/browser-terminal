@@ -36,6 +36,8 @@ const loginPage = $('login');
 const appPage = $('app');
 const statusEl = $('status');
 const errorEl = $('login-error');
+const noticeEl = $('login-notice');
+const retryEl = $<HTMLButtonElement>('login-retry');
 
 let selection: ReturnType<typeof createTextSelection> | null = null;
 /**
@@ -955,6 +957,7 @@ async function startSession(): Promise<void> {
 $('login-form').addEventListener('submit', async e => {
   e.preventDefault();
   errorEl.hidden = true;
+  noticeEl.hidden = true;
   const password = $<HTMLInputElement>('password').value;
 
   let res: Response;
@@ -981,10 +984,40 @@ $('login-form').addEventListener('submit', async e => {
   errorEl.hidden = false;
 });
 
-// ตอนโหลดหน้า: cookie 30 วันมีประโยชน์ก็ต่อเมื่อเช็คตอน mount — ไม่งั้นต้อง
-// พิมพ์รหัสทุกครั้งที่เปิดหน้าเว็บทั้งที่ cookie ยังไม่หมดอายุ
-void (async () => {
-  // ตอนโหลดหน้าเข้า session ต่อเฉพาะเมื่อ 'valid' — 'unreachable' ให้แสดง
-  // หน้า login ไว้ก่อน ปลอดภัยกว่าเข้า terminal ที่ต่อ ws ไม่ได้อยู่ดี
-  if (await checkSession() === 'valid') await startSession();
-})();
+/**
+ * พยายามเข้า session ด้วย cookie ที่มีอยู่
+ *
+ * แยก `'unreachable'` ออกจาก `'expired'` เป็นเรื่องคอขาดบาดตายของแอปนี้: เน็ตมือถือ
+ * ที่ยังไม่กลับมาตอนโหลดหน้าไม่ได้แปลว่า cookie หมดอายุ ก่อนหน้านี้ทั้งสองกรณีจบที่
+ * หน้า login เหมือนกันโดยไม่มีทางออก ผู้ใช้จึงต้องไปหาปุ่ม refresh ของเบราว์เซอร์เอง
+ * ทั้งที่กด refresh แล้วเข้าได้ทันทีโดยไม่ต้องกรอกอะไร
+ */
+async function tryResume(): Promise<void> {
+  retryEl.disabled = true;
+  noticeEl.hidden = true;
+  try {
+    const state = await checkSession();
+    if (state === 'valid') { await startSession(); return; }
+    if (state === 'unreachable') {
+      noticeEl.textContent = 'ต่อ server ไม่ได้ — จะลองใหม่ให้เองเมื่อเน็ตกลับมา';
+      noticeEl.hidden = false;
+      return;
+    }
+    // 'expired' — ต้องกรอกรหัสจริงๆ พาโฟกัสไปที่ช่องรหัสให้เลย
+    $<HTMLInputElement>('password').focus();
+  } finally {
+    retryEl.disabled = false;
+  }
+}
+
+retryEl.addEventListener('click', () => { void tryResume(); });
+
+// ลองใหม่เองเมื่อหน้ากลับมาเห็นหรือเน็ตกลับมา — เฉพาะตอนยังติดอยู่ที่หน้า login
+// ถ้าเข้า session ไปแล้ว `reconnect.wake()` ใน startSession เป็นคนดูแลแทน
+const resumeIfStranded = (): void => { if (!loginPage.hidden) void tryResume(); };
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') resumeIfStranded();
+});
+window.addEventListener('online', resumeIfStranded);
+
+void tryResume();

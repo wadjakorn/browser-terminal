@@ -847,6 +847,26 @@ async function connect(): Promise<void> {
     socket = new WebSocket(`${proto}//${location.host}/pty?cols=${cols}&rows=${rows}`);
     socket.binaryType = 'arraybuffer';
     ws = socket;
+  } catch {
+    /*
+     * ห้ามลบ catch นี้ทิ้งเพราะเห็นว่า "สองบรรทัดนี้ไม่น่าจะโยน"
+     *
+     * ทั้ง `fitAddon.fit()` (โยนได้เมื่อวัดขนาดจาก container ที่สูง/กว้างเป็น 0
+     * เช่นตอนแท็บถูกซ่อนหรือ layout ยังไม่ settle) และ `new WebSocket(...)` (โยน
+     * SecurityError เมื่อพอร์ตถูกบล็อก หรือ SyntaxError จาก URL ที่ประกอบไม่ได้)
+     * ล้วนโยนได้จริง และถ้าปล่อยให้หลุดออกไป มันจะไปโผล่เป็น unhandled rejection
+     * ที่ `void connect()` ใน deps ของ reconnect โดยไม่มีใครเห็น
+     *
+     * ที่ร้ายกว่านั้นคือมันฆ่า chain ทิ้งเงียบๆ: `ws` ยังเป็น null จึงไม่มี `onclose`
+     * ตัวไหนได้ยิงเลย และ `onclose` คือ *ที่เดียว* ที่เรียก reconnect.schedule()
+     * ผู้ใช้จะค้างอยู่กับข้อความ "กำลังต่อใหม่ใน N วิ…" ที่ไม่มีวันเกิดขึ้นจริง
+     * ตลอดกาล — ทางตันแบบเดียวกับที่ทั้งสาขานี้มีไว้ปิด
+     *
+     * จึงต้องตั้งนัดครั้งถัดไปเองที่นี่ แทนที่จะรอ onclose ที่ไม่มีทางมา
+     */
+    ws = null;
+    if (!stopped) reconnect.schedule();
+    return;
   } finally {
     connecting = false;
   }

@@ -1,7 +1,24 @@
 # PTY ที่อยู่รอดข้ามการ disconnect + ทางออกที่ไม่ตัน
 
 วันที่: 2026-08-26
-สถานะ: design (รอ review ก่อนแตกเป็น implementation plan)
+สถานะ: approved — **ส่งมอบเฉพาะเฟส 2**, เฟส 1 เลื่อนเป็น follow-up
+
+## สิ่งที่จะทำจริงในรอบนี้
+
+รอบนี้ทำ **เฟส 2 เท่านั้น** (ทางออกที่ไม่ตันฝั่ง client) ไม่แตะ `server/` เลย
+
+เฟส 1 (PTY persistence) ถูกเลื่อนออกไปโดยรู้ตัวว่าแลกอะไร: **อาการที่ 1 จะไม่หาย**
+สลับแท็บกลับมายังเจอจอว่าง เพราะ shell ตายไปตั้งแต่สายหลุด สิ่งที่เฟส 2 ให้คือ
+พากลับถึง prompt ที่ใช้ได้เร็วขึ้นและไม่มีทางตัน ไม่ใช่พากลับไปหา shell ตัวเดิม
+
+เฟส 2 ถูกออกแบบให้ไม่ต้องรื้อทีหลัง: เมื่อทำเฟส 1 ในภายหน้า สิ่งที่เพิ่มเข้ามาคือ
+control frame `attached`/`fresh` เพียงอย่างเดียว โค้ดของเฟส 2 ยังใช้ได้ทั้งหมด
+
+### สิ่งที่ตัดออกจากเฟส 2 เพราะไม่มีเฟส 1 รองรับ
+
+- control frame `{"t":"attached","fresh":…}` และการเพิ่มสาขาอ่าน text frame ฝั่ง client —
+  ไม่มีอะไรให้ replay `term.reset()` ยังยิงทุก `onopen` ตามเดิม
+- ข้อ 2.4 ยังทำครบ แต่ **guard socket ซ้อนกลายเป็นข้อบังคับ ไม่ใช่ของแถม** ดูเหตุผลในหัวข้อนั้น
 
 ## ปัญหา
 
@@ -47,7 +64,7 @@ if (await checkSession() === 'valid') await startSession();
 - ทำให้ PTY อยู่รอดข้ามการ restart ของ server process
 - ปรับ jank ของ `visualViewport` ระหว่าง IME animation (ยังไม่มีหลักฐาน — แยกเป็นงานอื่น)
 
-## เฟส 1 — PTY ผูกกับ session ไม่ใช่กับ socket
+## เฟส 1 (follow-up — ยังไม่ทำในรอบนี้) — PTY ผูกกับ session ไม่ใช่กับ socket
 
 ### แนวคิด
 
@@ -141,7 +158,7 @@ design นี้แตะพื้นที่ security-critical จึงระ
 การเปิดแท็บที่สองจะ "ย้าย" session มาที่แท็บใหม่พร้อมจอเดิม แทนที่จะได้ shell เปล่า
 socket เก่ายังโดนเตะด้วย 4000 เหมือนเดิม พฤติกรรมนี้ดีขึ้นและไม่ต้องแก้อะไรเพิ่ม
 
-## เฟส 2 — ไม่มีทางตันฝั่ง client
+## เฟส 2 (ของที่ส่งมอบรอบนี้) — ไม่มีทางตันฝั่ง client
 
 ### 2.1 Terminal สร้างครั้งเดียว
 
@@ -172,10 +189,13 @@ scrollback ฝั่ง client ทั้งที่ PTY ยังอยู่ �
 timer ของแท็บที่ถูกซ่อน ทำให้ตอนสลับกลับมาต้องรอเก้อ เพิ่ม wake จาก `visibilitychange`
 กับ `online` ที่ยกเลิก timer เดิม รีเซ็ต backoff แล้วต่อทันที
 
-**ต้องมาคู่กับ guard เสมอ:** `connect()` ทุกวันนี้ไม่เช็ค socket ที่กำลัง `CONNECTING`
-ถ้า `visibilitychange` กับ `online` ยิงพร้อมกันจะเปิด socket ซ้อน แล้ว server เตะตัวก่อนหน้า
-ด้วย 4000 — ก่อนเฟส 1 นั่นแปลว่าฆ่า shell ที่เพิ่งเกิด หลังเฟส 1 ยังทำให้ replay ซ้ำโดยเปล่าประโยชน์
-`connect()` ต้อง no-op ถ้ามี socket ที่ `CONNECTING` หรือ `OPEN` อยู่แล้ว
+**guard socket ซ้อนเป็นข้อบังคับ ไม่ใช่ของแถม:** `connect()` ทุกวันนี้ไม่เช็ค socket ที่กำลัง
+`CONNECTING` ถ้า `visibilitychange` กับ `online` ยิงพร้อมกันจะเปิด socket ซ้อน แล้ว server
+เตะตัวก่อนหน้าด้วย 4000 (`server/index.ts:304`) ซึ่งฝั่ง client ตั้ง `stopped = true` ถาวร
+(`web/main.ts:822`) — เท่ากับ**สร้างทางตันอันใหม่ขึ้นมาเองจากฟีเจอร์ที่ตั้งใจปิดทางตัน**
+และเป็นทางตันที่ reproduce ยากเพราะขึ้นกับจังหวะที่สอง event ยิงพร้อมกัน
+
+`connect()` ต้อง no-op ถ้ามี socket ที่ `CONNECTING` หรือ `OPEN` อยู่แล้ว และต้องมีเทสต์คุม
 
 ### 2.5 ตัดทิ้ง
 
@@ -186,32 +206,30 @@ logic "นับ `expired` สองครั้งติดกันก่อ�
 
 | ไฟล์ | เฟส | สิ่งที่เปลี่ยน |
 |---|---|---|
-| `server/session-pty.ts` *(ใหม่)* | 1 | ถือ PTY, ring buffer, grace timer, attach/detach |
-| `server/pty.ts` | 1 | `attachPty` เลิกเป็นเจ้าของ lifecycle, ws close = detach ไม่ใช่ SIGHUP |
-| `server/index.ts` | 1 | ใช้ `session-pty`, ฆ่า PTY ตอน logout และตอนปิด server |
-| `server/config.ts` | 1 | `PTY_GRACE_MS`, `PTY_REPLAY_BYTES` |
-| `web/main.ts` | 1,2 | `reset()` เฉพาะ `fresh`, สร้าง Terminal ครั้งเดียว, bootstrap retry, ปุ่ม, guard |
-| `web/reconnect.ts` *(ใหม่)* | 2 | backoff + wake trigger + guard — logic ล้วน เทสต์ได้ไม่ต้องมี DOM |
-| `web/index.html`, `web/style.css` | 2 | ปุ่มบนหน้า login และในแถบสถานะ |
-| `README.md`, `.env.example` | 1 | อธิบาย `PTY_GRACE_MS` / `PTY_REPLAY_BYTES` และสัญญาใหม่ว่า shell อยู่รอดข้ามการหลุด |
+| `server/session-pty.ts` *(ใหม่)* | 1 *(follow-up)* | ถือ PTY, ring buffer, grace timer, attach/detach |
+| `server/pty.ts` | 1 *(follow-up)* | `attachPty` เลิกเป็นเจ้าของ lifecycle, ws close = detach ไม่ใช่ SIGHUP |
+| `server/index.ts` | 1 *(follow-up)* | ใช้ `session-pty`, ฆ่า PTY ตอน logout และตอนปิด server |
+| `server/config.ts` | 1 *(follow-up)* | `PTY_GRACE_MS`, `PTY_REPLAY_BYTES` |
+| `web/main.ts` | **2** | สร้าง Terminal ครั้งเดียว, bootstrap retry, ปุ่ม, guard |
+| `web/reconnect.ts` *(ใหม่)* | **2** | backoff + wake trigger + guard — logic ล้วน เทสต์ได้ไม่ต้องมี DOM |
+| `web/index.html`, `web/style.css` | **2** | ปุ่มบนหน้า login และในแถบสถานะ |
+| `README.md`, `TODO.md` | **2** | อธิบายพฤติกรรม reconnect ใหม่ และบันทึกเฟส 1 เป็นงานค้างใน `TODO.md` |
 
 ## การทดสอบ
 
 Vitest ตามแนวเดิมของ repo:
 
-- `server/session-pty.test.ts` — detach แล้ว process ยังอยู่; reattach ได้ output ที่เกิดระหว่าง
-  detached; ring เกินเพดานแล้วทิ้งตัวเก่าสุด; หมด grace แล้วฆ่า; epoch เปลี่ยนแล้วไม่ attach ของเก่า;
-  **detach ตอน PTY ถูก pause ไว้แล้ว resume ให้เสมอ**
 - `web/reconnect.test.ts` — wake ยกเลิก timer เดิมและรีเซ็ต backoff; wake ซ้อนไม่เปิด socket ซ้ำ;
   `connect()` no-op เมื่อมี socket `CONNECTING`
-- `server/index.test.ts` — logout ฆ่า PTY ที่ detached อยู่
 - ปิดท้ายด้วย `pnpm test` และ `pnpm build`
 
 ## ความเสี่ยง
 
 | ความเสี่ยง | การรับมือ |
 |---|---|
-| PTY ค้างในสภาพ paused หลัง detach | เทสต์เฉพาะเคสนี้ + `resume()` ใน dispose path ของ outbound |
-| replay ก้อนใหญ่ทำให้ xterm ค้างตอน attach | เพดาน 256 KB และ `PTY_REPLAY_BYTES` ปรับได้ |
-| PTY รอดข้าม logout | ผูกกับ epoch + ฆ่าตรงจุด `epochs.bump()` ที่มีอยู่แล้ว |
-| ฟีเจอร์นี้พังบน production | `PTY_GRACE_MS=0` ปิดกลับไปเป็นพฤติกรรมเดิมได้ทันที |
+| wake ยิงซ้อนจนเปิด socket สองตัว แล้วโดน 4000 ตัวเอง | guard `CONNECTING`/`OPEN` ใน `connect()` + เทสต์เจาะเคสนี้ |
+| ผู้ใช้เข้าใจผิดว่าปุ่มกู้ shell เดิมได้ | ข้อความบนปุ่มและในแถบสถานะต้องสื่อว่าเป็นการเริ่ม shell ใหม่ |
+| อาการ "สลับแท็บแล้วจอว่าง" ยังอยู่ | รู้ตัวและยอมรับ — เฟส 1 บันทึกไว้ใน `TODO.md` แล้ว |
+
+ความเสี่ยงของเฟส 1 (PTY paused ค้าง, replay ใหญ่, PTY รอดข้าม logout) ไม่มีผลในรอบนี้
+เพราะไม่ได้แตะ `server/` เลย

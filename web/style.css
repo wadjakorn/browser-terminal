@@ -69,6 +69,15 @@ html:fullscreen, html:fullscreen body { width: 100%; height: 100%; }
 
 .status-close:active { background: rgba(255, 215, 154, .25); }
 
+.status-action {
+  flex: none;
+  padding: .2rem .6rem; border: 0; border-radius: .25rem;
+  background: rgba(255, 215, 154, .18); color: inherit;
+  font: inherit; cursor: pointer;
+}
+
+.status-action:active { background: rgba(255, 215, 154, .32); }
+
 .terminal {
   flex: 1; min-height: 0; padding: .25rem;
   /* เรารับ touch ทั้งหมดเอง — ไม่งั้นเบราว์เซอร์จะกิน gesture ไปทำ scroll/ซูมหน้าเว็บก่อน */

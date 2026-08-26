@@ -19,6 +19,14 @@ export interface StatusOptions {
   dismissible?: boolean;
   /** ข้อความเต็มสำหรับ tooltip เมื่อตัวที่แสดงถูกย่อ */
   title?: string;
+  /** ปุ่มที่พาผู้ใช้ออกจากสถานะปัจจุบัน — ใช้กับสถานะที่ไม่หายไปเอง */
+  action?: StatusAction;
+}
+
+/** ปุ่มที่พาผู้ใช้ออกจากสถานะปัจจุบัน — ใช้กับสถานะที่ไม่หายไปเอง */
+export interface StatusAction {
+  label: string;
+  onClick: () => void;
 }
 
 /** สิ่งที่ต้องปรากฏบนจอ — `null` คือซ่อนแถบทั้งอัน */
@@ -26,6 +34,7 @@ export interface StatusView {
   text: string;
   title?: string;
   dismissible: boolean;
+  action?: StatusAction;
 }
 
 /** ค่าที่ใช้กับข้อความแจ้งผลทุกอัน — รวมไว้ที่เดียวเพื่อให้พฤติกรรมเหมือนกันหมด */
@@ -55,7 +64,12 @@ export function createStatus(deps: {
 
     if (text === null) { deps.render(null); return; }
 
-    deps.render({ text, title: options.title, dismissible: options.dismissible === true });
+    deps.render({
+      text,
+      title: options.title,
+      dismissible: options.dismissible === true,
+      ...(options.action ? { action: options.action } : {}),
+    });
 
     if (options.autoHideMs !== undefined) {
       const at = generation;
@@ -91,6 +105,15 @@ export function renderStatus(
   message.textContent = view.text;
   if (view.title) message.title = view.title;
   element.replaceChildren(message);
+
+  if (view.action) {
+    const action = element.ownerDocument.createElement('button');
+    action.type = 'button';
+    action.className = 'status-action';
+    action.textContent = view.action.label;
+    action.addEventListener('click', view.action.onClick);
+    element.append(action);
+  }
 
   if (view.dismissible) {
     const close = element.ownerDocument.createElement('button');

@@ -27,6 +27,7 @@ import {
 import { loadSelectionPrefs } from './selection-prefs.js';
 import { createFullscreenController } from './fullscreen.js';
 import { cellChar, createLinkOpener, type LinkOpener } from './links.js';
+import { createReconnect } from './reconnect.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -53,7 +54,6 @@ const fullscreen = createFullscreenController(document);
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let ws: WebSocket | null = null;
-let backoffMs = 1000;
 let stopped = false;   // true เมื่อถูกเตะด้วย code 4000 — ห้าม reconnect
 let resetInputModifiers: () => void = () => {};
 
@@ -66,6 +66,11 @@ const status = createStatus({
   }),
 });
 const showStatus = status.show;
+
+const reconnect = createReconnect({
+  connect: () => { void connect(); },
+  onWait: seconds => { showStatus(`กำลังต่อใหม่ใน ${seconds} วิ…`); },
+});
 
 /**
  * GET /api/session — แยกสามสถานะ ไม่ใช่ boolean
@@ -93,6 +98,9 @@ function backToLogin(): void {
   appPage.hidden = true;
   loginPage.hidden = false;
   showStatus(null);
+  // ต้องยกเลิก timer ที่ค้างอยู่ด้วย ไม่งั้น backoff เดิมจะยิง connect() ตอนผู้ใช้
+  // นั่งอยู่หน้า login — connect() จะ return ทันทีเพราะ stopped แต่ backoff จะไม่ถูก reset
+  reconnect.cancel();
 }
 
 /** ตั้งค่าใน initTerminal และใช้ต่อใน bindTouch ซึ่งถูกเรียกหลังจากนั้น */
@@ -787,8 +795,29 @@ async function doPaste(t: Terminal): Promise<void> {
 /** รอ 1 เฟรมให้ layout settle ก่อนวัดขนาด */
 const nextFrame = () => new Promise<void>(r => requestAnimationFrame(() => r()));
 
+/**
+ * ออกจากสถานะที่หยุดถาวร — ทุกจุดที่ตั้ง `stopped = true` ต้องมีปุ่มที่เรียกตัวนี้
+ *
+ * การต่อใหม่ได้ shell ใหม่เสมอ (server spawn PTY ต่อหนึ่งการเชื่อมต่อ) ข้อความบนปุ่ม
+ * จึงต้องไม่สัญญาว่ากู้ของเดิมได้
+ */
+function restart(): void {
+  stopped = false;
+  reconnect.reset();
+  showStatus(null);
+  void connect();
+}
+
 async function connect(): Promise<void> {
   if (stopped || !term || !fitAddon) return;
+
+  /*
+   * กัน socket ซ้อน — `visibilitychange` กับ `online` ยิงพร้อมกันได้ และ socket
+   * ตัวที่สองจะทำให้ server เตะตัวแรกด้วย 4000 (`server/index.ts:304`) ซึ่งฝั่งนี้
+   * ตีความว่า "เปิดที่อื่นแล้ว" แล้วตั้ง stopped ถาวร — คือสร้างทางตันอันใหม่
+   * ขึ้นมาเองจากฟีเจอร์ที่มีไว้ปิดทางตัน
+   */
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
 
   // ลำดับนี้สลับกันไม่ได้: ต้อง fit ก่อนจึงจะรู้ cols/rows ที่จะส่งไปกับ ws
   await nextFrame();
@@ -801,7 +830,7 @@ async function connect(): Promise<void> {
   ws = socket;
 
   socket.onopen = () => {
-    backoffMs = 1000;
+    reconnect.reset();
     showStatus(null);
     term!.reset();          // PTY ใหม่คือ process ใหม่ ไม่รู้ว่าจออยู่ในสภาพไหน
     resetInputModifiers();
@@ -821,20 +850,23 @@ async function connect(): Promise<void> {
     ws = null;
     if (ev.code === 4000) {
       stopped = true;
-      showStatus('เปิดที่อื่นแล้ว — โหลดหน้านี้ใหม่เพื่อใช้ที่นี่แทน');
+      showStatus('เปิดที่อื่นแล้ว — ใช้ที่นี่แทนได้โดยเริ่ม shell ใหม่', {
+        action: { label: 'ใช้ที่นี่', onClick: restart },
+      });
       return;
     }
     if (ev.code === 1000) {
       const m = /^exit:(-?\d+)$/.exec(ev.reason);
       const code = m ? m[1] : null;
-      let text = 'shell ปิดแล้ว — โหลดหน้านี้ใหม่เพื่อเริ่มใหม่';
+      let text = 'shell ปิดแล้ว';
       if (code !== null) {
-        text = `[process exited: code ${code}] — โหลดหน้านี้ใหม่เพื่อเริ่มใหม่`;
+        text = `[process exited: code ${code}]`;
         if (code === '127') {
           text += ' (127 = หาโปรแกรมไม่เจอ เช็ค SHELL_CMD ใน .env)';
         }
       }
-      showStatus(text);
+      stopped = true;
+      showStatus(text, { action: { label: 'เริ่ม shell ใหม่', onClick: restart } });
       return;
     }
     void (async () => {
@@ -844,9 +876,7 @@ async function connect(): Promise<void> {
       // เน็ตล่ม (unreachable) ต้อง reconnect ต่อ ไม่งั้นขาดสัญญาณแวบเดียว
       // ก็ต้องพิมพ์รหัสใหม่ ซึ่งคือเคสที่เกิดบ่อยที่สุดของแอปนี้
       if (await checkSession() === 'expired') { backToLogin(); return; }
-      showStatus(`กำลังต่อใหม่ใน ${Math.round(backoffMs / 1000)} วิ…`);
-      setTimeout(() => { void connect(); }, backoffMs);
-      backoffMs = Math.min(backoffMs * 2, 8000);
+      reconnect.schedule();
     })();
   };
 }
@@ -857,6 +887,20 @@ function sendResize(): void {
 }
 
 async function startSession(): Promise<void> {
+  /*
+   * เข้ามารอบสอง (ถูกเด้งไป login แล้วกลับเข้ามา) ต้องไม่สร้าง Terminal ตัวใหม่ทับ
+   * ของเดิม — ไม่มี teardown ให้เรียก ของเก่าจึงค้างอยู่ในหน้าและใน DOM ตลอดไป
+   * เมื่อมี Terminal อยู่แล้วก็แค่สลับหน้ากลับมาแล้วต่อใหม่พอ
+   */
+  if (term) {
+    stopped = false;
+    loginPage.hidden = true;
+    appPage.hidden = false;
+    reconnect.reset();
+    await connect();
+    return;
+  }
+
   stopped = false;
   loginPage.hidden = true;
   appPage.hidden = false;          // ต้องแสดงก่อน terminal จึงจะมีขนาดจริง
@@ -875,6 +919,14 @@ async function startSession(): Promise<void> {
     created.keybar.onViewportFrame(frame.height);
   });
   window.addEventListener('orientationchange', created.keybar.onOrientationChange);
+
+  // timer ของแท็บที่ถูกซ่อนถูก throttle จนหยุด — ถ้าไม่ปลุกตรงนี้ ผู้ใช้ที่สลับแอป
+  // กลับมาจะนั่งมองจอนิ่งรอ timer ที่ควรยิงไปนานแล้ว ซึ่งแยกไม่ออกจากอาการค้าง
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') reconnect.wake();
+  });
+  window.addEventListener('online', () => { reconnect.wake(); });
+
   await connect();
 }
 

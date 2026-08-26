@@ -28,6 +28,7 @@ import { loadSelectionPrefs } from './selection-prefs.js';
 import { createFullscreenController } from './fullscreen.js';
 import { cellChar, createLinkOpener, type LinkOpener } from './links.js';
 import { createReconnect } from './reconnect.js';
+import { createStrandedRetry } from './stranded-retry.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -1003,7 +1004,7 @@ $('login-form').addEventListener('submit', async e => {
     return;
   }
 
-  if (res.ok) { cancelStrandedRetry(); await startSession(); return; }
+  if (res.ok) { strandedRetry.cancel(); await startSession(); return; }
   if (res.status === 429) {
     errorEl.textContent = 'ลองผิดบ่อยเกินไป รอสักครู่แล้วลองใหม่';
   } else if (res.status === 401) {
@@ -1014,12 +1015,6 @@ $('login-form').addEventListener('submit', async e => {
   errorEl.hidden = false;
 });
 
-// ระยะรอของ timer ลองใหม่เองตอนติดอยู่หน้า login (หน่วยมิลลิวินาที) — ไต่จาก 5 วินาที
-// ถึง 30 วินาทีเป็นเพดาน ตั้งใจให้ต่างจาก reconnect.ts (1s–8s) เพราะที่นี่ยังไม่มี
-// session ที่ใช้งานได้เลย จึงไม่ต้องรีบเท่าตอนกู้ ws ที่หลุดกลางคัน
-const STRANDED_RETRY_MIN_MS = 5_000;
-const STRANDED_RETRY_MAX_MS = 30_000;
-
 // ธงกันเรียกซ้อน — `visibilitychange` กับ `online` ยิงพร้อมกันได้ (ดูคอมเมนต์
 // เดียวกันใน connect()) และตอนนี้ยังมี timer ลองใหม่เองที่อาจตื่นพร้อมกับทั้งคู่ได้
 // อีกทาง ถ้าไม่กันไว้ สอง tryResume() ที่ทับซ้อนกันอาจแข่งกันเรียก startSession()
@@ -1029,41 +1024,20 @@ const STRANDED_RETRY_MAX_MS = 30_000;
 // เดิมจะพังทันที ธง `resuming` นี้จึงต้องอยู่ ไม่ให้เรียกซ้อนได้ตั้งแต่ต้นทาง
 let resuming = false;
 
-let strandedRetryTimer: ReturnType<typeof setTimeout> | null = null;
-let strandedRetryDelay = STRANDED_RETRY_MIN_MS;
-
-function cancelStrandedRetry(): void {
-  if (strandedRetryTimer !== null) {
-    clearTimeout(strandedRetryTimer);
-    strandedRetryTimer = null;
-  }
-  strandedRetryDelay = STRANDED_RETRY_MIN_MS;
-}
-
-function scheduleStrandedRetry(): void {
-  if (strandedRetryTimer !== null) return; // มีนัดอยู่แล้ว ไม่ต้องซ้อน
-  strandedRetryTimer = setTimeout(fireStrandedRetry, strandedRetryDelay);
-}
-
-function fireStrandedRetry(): void {
-  strandedRetryTimer = null;
-  // ถ้ามี tryResume() อีกตัวกำลังวิ่งอยู่พอดี (กดปุ่ม / visibilitychange / online
-  // ชนกับนัดของ timer เอง) `tryResume()` ด้านล่างจะเจอ `resuming` แล้ว return ทันที
-  // โดยไม่ทันเข้าไปถึงกิ่ง 'unreachable' ที่เป็นจุดเดียวที่ตั้งนัดครั้งถัดไป — ถ้าปล่อย
-  // ผ่านไปเฉยๆ ตรงนี้ chain จะตายเงียบ: timer หมดอายุไปแล้ว ไม่มีใครตั้งนัดใหม่ให้อีก
-  // ทั้งที่ notice บนจอยังพูดว่า "จะลองใหม่ให้เอง" อยู่ ต้องมองว่า early return ของ
-  // `resuming` แบบนี้ไม่ใช่ "งานเสร็จแล้ว ไม่ต้องทำอะไรต่อ" แต่คือ "ยังไม่ได้ลองจริง"
-  // จึงต้องตั้งนัดใหม่แทนตัวที่เพิ่งหมดอายุไปเสมอ ด้วย delay เดิม (ไม่ doubled เพราะ
-  // รอบนี้ไม่นับเป็นความพยายามที่ล้มเหลวจริง แค่ชนกับตัวอื่นที่กำลังทำงานอยู่) —
-  // เรียกฟังก์ชันตัวเองซ้ำได้เรื่อยๆ ถ้าชนซ้ำหลายครั้งติดกัน โดยไม่มีทางตั้ง timer
-  // ซ้อนสองตัวเพราะ `strandedRetryTimer` ถูก null ไว้ก่อนเช็คเสมอ
-  if (resuming) {
-    strandedRetryTimer = setTimeout(fireStrandedRetry, strandedRetryDelay);
-    return;
-  }
-  strandedRetryDelay = Math.min(strandedRetryDelay * 2, STRANDED_RETRY_MAX_MS);
-  void tryResume();
-}
+/**
+ * timer ลองเข้า session เองตอนติดอยู่หน้า login — ตรรกะจับเวลาอยู่ใน stranded-retry.ts
+ *
+ * เงื่อนไข "ยังติดอยู่หน้า login จริงไหม" อยู่ที่นี่ทั้งคู่โดยตั้งใจ ไม่ใช่ในโมดูล
+ * เพราะโมดูลไม่ควรรู้จัก DOM ของหน้านี้ และเพราะมันเป็นทางกัน timer รั่วข้ามการ
+ * login ที่สำเร็จ: `tryResume()` เรียก `cancel()` แล้วค่อย `await startSession()`
+ * ถ้านัดของ timer มาตกในช่วง await นั้นพอดี การต่อนัดแบบไม่มีเงื่อนไขจะทำให้ timer
+ * มีชีวิตรอดข้ามการ login ไปยิง tryResume() เปล่าๆ ทีหลังทั้งที่เข้า session ได้แล้ว
+ */
+const strandedRetry = createStrandedRetry({
+  // `!loginPage.hidden` = ยังติดอยู่หน้า login จริง — เข้า session ไปแล้วให้เงียบ
+  attempt: () => { resumeIfStranded(); },
+  busy: () => !loginPage.hidden && resuming,
+});
 
 /**
  * พยายามเข้า session ด้วย cookie ที่มีอยู่
@@ -1086,18 +1060,18 @@ async function tryResume(): Promise<void> {
   try {
     const state = await checkSession();
     if (state === 'valid') {
-      cancelStrandedRetry();
+      strandedRetry.cancel();
       await startSession();
       return;
     }
     if (state === 'unreachable') {
       noticeEl.textContent = 'ต่อ server ไม่ได้ — จะลองใหม่ให้เองอีกสักครู่';
       noticeEl.hidden = false;
-      scheduleStrandedRetry();
+      strandedRetry.schedule();
       return;
     }
     // 'expired' — ต้องกรอกรหัสจริงๆ พาโฟกัสไปที่ช่องรหัสให้เลย ไม่ต้องลองเองอีก
-    cancelStrandedRetry();
+    strandedRetry.cancel();
     $<HTMLInputElement>('password').focus();
   } finally {
     retryEl.disabled = false;

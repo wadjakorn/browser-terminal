@@ -67,7 +67,9 @@ let resetInputModifiers: () => void = () => {};
 
 const status = createStatus({
   render: view => renderStatus(statusEl, view, () => {
-    status.show(null);
+    // dismiss() ไม่ใช่ show(null) — ปุ่ม × ต้องถอยกลับไปที่สถานะยืนพื้นที่ค้างอยู่
+    // (เช่น "เปิดที่อื่นแล้ว" ที่พกปุ่มทางออกมาด้วย) ไม่ใช่ล้างแถบทิ้งทั้งอัน
+    status.dismiss();
     // คืนโฟกัสให้ terminal เสมอ ไม่งั้นปุ่มปิดค้างโฟกัสไว้ แล้วคีย์ถัดไปที่ผู้ใช้กด
     // จะไปเข้าปุ่มแทนที่จะเข้า terminal
     term?.focus();
@@ -870,7 +872,10 @@ async function connect(): Promise<void> {
     ws = null;
     if (ev.code === 4000) {
       stopped = true;
+      // sticky: ปุ่มนี้คือทางออกทางเดียวของผู้ใช้ตอนนี้ ห้ามให้ toast ใบไหน
+      // (แนบรูป/วาง/fullscreen ที่แถบปุ่มยังกดได้อยู่) มาทับแล้วลบมันหายไป
       showStatus('เปิดที่อื่นแล้ว — ใช้ที่นี่แทนได้โดยเริ่ม shell ใหม่', {
+        sticky: true,
         action: { label: 'ใช้ที่นี่', onClick: restart },
       });
       return;
@@ -886,7 +891,12 @@ async function connect(): Promise<void> {
         }
       }
       stopped = true;
-      showStatus(text, { action: { label: 'เริ่ม shell ใหม่', onClick: restart } });
+      // sticky ด้วยเหตุผลเดียวกับ 4000 ข้างบน — stopped = true แล้วไม่มี timer ไหน
+      // มาต่อให้อีก ปุ่มนี้หายเมื่อไหร่คือเหลือแต่ปุ่ม refresh ของเบราว์เซอร์
+      showStatus(text, {
+        sticky: true,
+        action: { label: 'เริ่ม shell ใหม่', onClick: restart },
+      });
       return;
     }
     void (async () => {

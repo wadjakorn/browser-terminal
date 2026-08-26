@@ -90,6 +90,94 @@ describe('createStatus', () => {
   });
 });
 
+/*
+ * ช่องค้าง (sticky) — นี่คือทางตันที่เคยมีจริง: โดนเตะด้วย 4000 → แถบขึ้นปุ่ม
+ * "ใช้ที่นี่" ซึ่งเป็นทางออกทางเดียว (stopped = true, ไม่มี timer ไหนมาต่อให้อีก)
+ * → ผู้ใช้กดปุ่มแนบรูปที่ยังกดได้อยู่ → toast "ยังไม่ได้เชื่อมต่อ" ทับ → 6 วิผ่านไป
+ * แถบว่างเปล่า ปุ่มทางออกหายไปแล้ว เหลือทางเดียวคือกด refresh ของเบราว์เซอร์
+ */
+describe('สถานะยืนพื้นที่ข้อความชั่วคราวลบทิ้งไม่ได้', () => {
+  it('toast ที่หมดเวลา ถอยกลับไปที่ sticky ไม่ใช่หายไปเฉยๆ', () => {
+    const { status, last, fire } = setup();
+    const onClick = () => {};
+
+    status.show('เปิดที่อื่นแล้ว', { sticky: true, action: { label: 'ใช้ที่นี่', onClick } });
+    status.show('ยังไม่ได้เชื่อมต่อ — รอสักครู่แล้วลองใหม่', TRANSIENT);
+    expect(last()?.text).toBe('ยังไม่ได้เชื่อมต่อ — รอสักครู่แล้วลองใหม่');
+
+    fire();
+    expect(last()?.text).toBe('เปิดที่อื่นแล้ว');
+    expect(last()?.action).toEqual({ label: 'ใช้ที่นี่', onClick });
+  });
+
+  it('กดปิด toast ที่ทับอยู่ ก็ถอยกลับไปที่ sticky เหมือนกัน', () => {
+    const { status, last } = setup();
+
+    status.show('shell ปิดแล้ว', { sticky: true, action: { label: 'เริ่ม shell ใหม่', onClick: () => {} } });
+    status.show('วางไม่สำเร็จ', TRANSIENT);
+
+    status.dismiss();
+    expect(last()?.text).toBe('shell ปิดแล้ว');
+  });
+
+  it('ตัวจับเวลาของ toast ที่ถูกกดปิดไปแล้ว ต้องไม่ลบ sticky ทีหลัง', () => {
+    const { status, last, timers } = setup();
+
+    status.show('shell ปิดแล้ว', { sticky: true, action: { label: 'เริ่ม shell ใหม่', onClick: () => {} } });
+    status.show('วางไม่สำเร็จ', TRANSIENT);
+    const stale = timers[0]!.fn;
+
+    status.dismiss();
+    stale();
+
+    expect(last()?.text).toBe('shell ปิดแล้ว');
+  });
+
+  it('show(null) เท่านั้นที่ล้าง sticky ทิ้ง', () => {
+    const { status, last, fire } = setup();
+
+    status.show('เปิดที่อื่นแล้ว', { sticky: true, action: { label: 'ใช้ที่นี่', onClick: () => {} } });
+    status.show(null);
+    expect(last()).toBeNull();
+
+    // ต่อติดแล้ว (restart) — toast ใบถัดไปต้องหายไปเป็น null ตามพฤติกรรมเดิม
+    status.show('แนบรูปแล้ว: cat.jpg', TRANSIENT);
+    fire();
+    expect(last()).toBeNull();
+  });
+
+  it('sticky ตัวใหม่แทนที่ตัวเก่า', () => {
+    const { status, last, fire } = setup();
+
+    status.show('เปิดที่อื่นแล้ว', { sticky: true, action: { label: 'ใช้ที่นี่', onClick: () => {} } });
+    status.show('shell ปิดแล้ว', { sticky: true, action: { label: 'เริ่ม shell ใหม่', onClick: () => {} } });
+    status.show('วางไม่สำเร็จ', TRANSIENT);
+
+    fire();
+    expect(last()?.text).toBe('shell ปิดแล้ว');
+  });
+
+  it('กดปิดตัว sticky เอง = ไล่มันไปจริงๆ ไม่ใช่วาดกลับมาให้ปุ่มปิดกดไม่ติด', () => {
+    const { status, last } = setup();
+
+    status.show('shell ปิดแล้ว', {
+      sticky: true,
+      dismissible: true,
+      action: { label: 'เริ่ม shell ใหม่', onClick: () => {} },
+    });
+
+    status.dismiss();
+    expect(last()).toBeNull();
+  });
+
+  it('ไม่มี sticky ค้างอยู่ dismiss ก็ล้างแถบตามเดิม', () => {
+    const { status, last } = setup();
+    status.show('แนบรูปแล้ว: cat.jpg', TRANSIENT);
+    status.dismiss();
+    expect(last()).toBeNull();
+  });
+});
+
 describe('ปุ่ม action ในแถบสถานะ', () => {
   it('ส่ง action ต่อไปให้ผู้วาด', () => {
     const { status, last } = setup();
@@ -185,6 +273,24 @@ describe('renderStatus', () => {
     expect(button?.textContent).toBe('เชื่อมต่อใหม่');
     click(button);
     expect(clicked).toBe(1);
+  });
+
+  /*
+   * ลำดับสำคัญ: ปุ่ม action คือทางออกของผู้ใช้ ต้องอยู่ก่อนปุ่ม × ที่แค่ซ่อนข้อความ
+   * ทั้งเพื่อสายตาและเพื่อลำดับ tab — สลับกันเมื่อไหร่ นิ้วโป้งบนมือถือจะเจอปุ่มปิด
+   * ก่อนปุ่มที่พาออกจากสถานะ
+   */
+  it('วาดปุ่ม action ก่อนปุ่มปิดเสมอ', () => {
+    const host = makeFakeHost();
+
+    renderStatus(host as unknown as HTMLElement, {
+      text: 'shell ปิดแล้ว',
+      dismissible: true,
+      action: { label: 'เริ่ม shell ใหม่', onClick: () => {} },
+    }, () => {});
+
+    expect(host.children.map(child => child.className))
+      .toEqual(['status-text', 'status-action', 'status-close']);
   });
 
   it('ไม่มี action ก็ไม่มีปุ่ม', () => {

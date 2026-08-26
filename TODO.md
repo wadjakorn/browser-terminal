@@ -38,6 +38,13 @@ README, คอมเมนต์ในโค้ด, ข้อความ error 
   สลับแท็บกลับมาแล้วเจอจอว่าง design เต็มอยู่ใน
   `docs/superpowers/specs/2026-08-26-pty-persistence-design.md` หัวข้อ "เฟส 1"
 
+- **`web/` ไม่ถูก type-check ตอน build** — `pnpm build` คือ `vite build && tsc -p
+  tsconfig.server.json` ส่วน `vite build` ทำแค่ transpile ไม่ตรวจ type ให้เลย ทุกอย่าง
+  ใต้ `web/` จึงผ่าน "build เขียว" ไปได้ทั้งที่ผิด (เคยมี scope error ของ `const socket`
+  รอดมาแล้วจริง) วันนี้ `npx tsc --noEmit -p tsconfig.json` ยังแดงอยู่สองไฟล์ใต้ `web/`
+  คือ `web/image-attach.test.ts` และ `web/keybar.ts` งานคือแก้สองไฟล์นั้นให้เขียวก่อน
+  แล้วค่อยต่อ type-check ของ `web/` เข้าไปใน `pnpm build`
+
 ### `$<T>()` cast โดยไม่ตรวจ
 
 `web/main.ts:356` — cast element เป็น type ที่ขอโดยไม่ตรวจจริง ถ้า HTML เปลี่ยน

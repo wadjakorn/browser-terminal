@@ -33,15 +33,15 @@ README, คอมเมนต์ในโค้ด, ข้อความ error 
 
 ## ความทนทาน
 
-### `$<T>()` cast โดยไม่ตรวจ
-
-`web/main.ts:356` — cast element เป็น type ที่ขอโดยไม่ตรวจจริง ถ้า HTML เปลี่ยน
-จะพังเป็น `undefined` ตอน runtime แทนที่จะบอกว่าหา element ไม่เจอ
-
 - **PTY อยู่รอดข้ามการ disconnect** — วันนี้ `server/pty.ts` ผูก `term.kill('SIGHUP')`
   ไว้กับ `ws.on('close')` ทำให้เน็ตกระตุกหนึ่งครั้งเท่ากับฆ่า shell อาการที่ผู้ใช้เห็นคือ
   สลับแท็บกลับมาแล้วเจอจอว่าง design เต็มอยู่ใน
   `docs/superpowers/specs/2026-08-26-pty-persistence-design.md` หัวข้อ "เฟส 1"
+
+### `$<T>()` cast โดยไม่ตรวจ
+
+`web/main.ts:356` — cast element เป็น type ที่ขอโดยไม่ตรวจจริง ถ้า HTML เปลี่ยน
+จะพังเป็น `undefined` ตอน runtime แทนที่จะบอกว่าหา element ไม่เจอ
 
 ## เทสที่ยังขาด
 

@@ -973,7 +973,7 @@ $('login-form').addEventListener('submit', async e => {
     return;
   }
 
-  if (res.ok) { await startSession(); return; }
+  if (res.ok) { cancelStrandedRetry(); await startSession(); return; }
   if (res.status === 429) {
     errorEl.textContent = 'ลองผิดบ่อยเกินไป รอสักครู่แล้วลองใหม่';
   } else if (res.status === 401) {
@@ -984,6 +984,41 @@ $('login-form').addEventListener('submit', async e => {
   errorEl.hidden = false;
 });
 
+// ระยะรอของ timer ลองใหม่เองตอนติดอยู่หน้า login (หน่วยมิลลิวินาที) — ไต่จาก 5 วินาที
+// ถึง 30 วินาทีเป็นเพดาน ตั้งใจให้ต่างจาก reconnect.ts (1s–8s) เพราะที่นี่ยังไม่มี
+// session ที่ใช้งานได้เลย จึงไม่ต้องรีบเท่าตอนกู้ ws ที่หลุดกลางคัน
+const STRANDED_RETRY_MIN_MS = 5_000;
+const STRANDED_RETRY_MAX_MS = 30_000;
+
+// ธงกันเรียกซ้อน — `visibilitychange` กับ `online` ยิงพร้อมกันได้ (ดูคอมเมนต์
+// เดียวกันใน connect()) และตอนนี้ยังมี timer ลองใหม่เองที่อาจตื่นพร้อมกับทั้งคู่ได้
+// อีกทาง ถ้าไม่กันไว้ สอง tryResume() ที่ทับซ้อนกันอาจแข่งกันเรียก startSession()
+// ซึ่งบังเอิญปลอดภัยอยู่ตอนนี้เพราะ startSession() ตั้งค่า `term` ก่อน await ตัวแรก
+// (ตัวที่แพ้จะเจอ early return `if (term)`) — นั่นคือความบังเอิญของลำดับ statement
+// ไม่ใช่สัญญา ถ้าใครแทรก await ไว้ก่อนบรรทัดตั้งค่า `term` ในอนาคต การพึ่งพาลำดับ
+// เดิมจะพังทันที ธง `resuming` นี้จึงต้องอยู่ ไม่ให้เรียกซ้อนได้ตั้งแต่ต้นทาง
+let resuming = false;
+
+let strandedRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let strandedRetryDelay = STRANDED_RETRY_MIN_MS;
+
+function cancelStrandedRetry(): void {
+  if (strandedRetryTimer !== null) {
+    clearTimeout(strandedRetryTimer);
+    strandedRetryTimer = null;
+  }
+  strandedRetryDelay = STRANDED_RETRY_MIN_MS;
+}
+
+function scheduleStrandedRetry(): void {
+  if (strandedRetryTimer !== null) return; // มีนัดอยู่แล้ว ไม่ต้องซ้อน
+  strandedRetryTimer = setTimeout(() => {
+    strandedRetryTimer = null;
+    strandedRetryDelay = Math.min(strandedRetryDelay * 2, STRANDED_RETRY_MAX_MS);
+    void tryResume();
+  }, strandedRetryDelay);
+}
+
 /**
  * พยายามเข้า session ด้วย cookie ที่มีอยู่
  *
@@ -991,22 +1026,36 @@ $('login-form').addEventListener('submit', async e => {
  * ที่ยังไม่กลับมาตอนโหลดหน้าไม่ได้แปลว่า cookie หมดอายุ ก่อนหน้านี้ทั้งสองกรณีจบที่
  * หน้า login เหมือนกันโดยไม่มีทางออก ผู้ใช้จึงต้องไปหาปุ่ม refresh ของเบราว์เซอร์เอง
  * ทั้งที่กด refresh แล้วเข้าได้ทันทีโดยไม่ต้องกรอกอะไร
+ *
+ * เคสที่พบบ่อยที่สุดจริงๆ ของโปรเจกต์นี้คือ *server* ต่อไม่ติด (Tailscale route
+ * กระตุก หรือ process server ล่ม) ทั้งที่ Wi-Fi ของมือถือไม่เคยหลุดเลยและแท็บก็เปิด
+ * อยู่ตลอด — เหตุการณ์ `online` จึงไม่มีวันยิงในเคสนี้ ต้องมี timer ลองเองด้วย ไม่งั้น
+ * ข้อความ "จะลองใหม่ให้เอง" จะเป็นคำสัญญาที่ไม่มีวันเกิดขึ้นจริง
  */
 async function tryResume(): Promise<void> {
+  if (resuming) return;
+  resuming = true;
   retryEl.disabled = true;
   noticeEl.hidden = true;
   try {
     const state = await checkSession();
-    if (state === 'valid') { await startSession(); return; }
-    if (state === 'unreachable') {
-      noticeEl.textContent = 'ต่อ server ไม่ได้ — จะลองใหม่ให้เองเมื่อเน็ตกลับมา';
-      noticeEl.hidden = false;
+    if (state === 'valid') {
+      cancelStrandedRetry();
+      await startSession();
       return;
     }
-    // 'expired' — ต้องกรอกรหัสจริงๆ พาโฟกัสไปที่ช่องรหัสให้เลย
+    if (state === 'unreachable') {
+      noticeEl.textContent = 'ต่อ server ไม่ได้ — จะลองใหม่ให้เองอีกสักครู่';
+      noticeEl.hidden = false;
+      scheduleStrandedRetry();
+      return;
+    }
+    // 'expired' — ต้องกรอกรหัสจริงๆ พาโฟกัสไปที่ช่องรหัสให้เลย ไม่ต้องลองเองอีก
+    cancelStrandedRetry();
     $<HTMLInputElement>('password').focus();
   } finally {
     retryEl.disabled = false;
+    resuming = false;
   }
 }
 

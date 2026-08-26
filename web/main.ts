@@ -27,6 +27,8 @@ import {
 import { loadSelectionPrefs } from './selection-prefs.js';
 import { createFullscreenController } from './fullscreen.js';
 import { cellChar, createLinkOpener, type LinkOpener } from './links.js';
+import { createReconnect } from './reconnect.js';
+import { createStrandedRetry } from './stranded-retry.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -35,6 +37,8 @@ const loginPage = $('login');
 const appPage = $('app');
 const statusEl = $('status');
 const errorEl = $('login-error');
+const noticeEl = $('login-notice');
+const retryEl = $<HTMLButtonElement>('login-retry');
 
 let selection: ReturnType<typeof createTextSelection> | null = null;
 /**
@@ -53,19 +57,31 @@ const fullscreen = createFullscreenController(document);
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let ws: WebSocket | null = null;
-let backoffMs = 1000;
-let stopped = false;   // true เมื่อถูกเตะด้วย code 4000 — ห้าม reconnect
+// true เมื่ออยู่ในสถานะหยุดถาวร (โดนเตะด้วย 4000, shell ปิดเอง (code 1000), หรือ
+// session หมดอายุผ่าน backToLogin) — ห้าม reconnect อัตโนมัติ จนกว่าจะถูกล้างโดย
+// restart() หรือการเข้า startSession() ใหม่
+let stopped = false;
+// กันสอง caller เข้า connect() พร้อมกันในช่วงระหว่างเช็ค ws กับตอนที่ ws ถูก assign
+// จริง (มี `await nextFrame()` คั่นกลาง — ดูคอมเมนต์ที่จุดใช้งานใน connect())
+let connecting = false;
 let resetInputModifiers: () => void = () => {};
 
 const status = createStatus({
   render: view => renderStatus(statusEl, view, () => {
-    status.show(null);
+    // dismiss() ไม่ใช่ show(null) — ปุ่ม × ต้องถอยกลับไปที่สถานะยืนพื้นที่ค้างอยู่
+    // (เช่น "เปิดที่อื่นแล้ว" ที่พกปุ่มทางออกมาด้วย) ไม่ใช่ล้างแถบทิ้งทั้งอัน
+    status.dismiss();
     // คืนโฟกัสให้ terminal เสมอ ไม่งั้นปุ่มปิดค้างโฟกัสไว้ แล้วคีย์ถัดไปที่ผู้ใช้กด
     // จะไปเข้าปุ่มแทนที่จะเข้า terminal
     term?.focus();
   }),
 });
 const showStatus = status.show;
+
+const reconnect = createReconnect({
+  connect: () => { void connect(); },
+  onWait: seconds => { showStatus(`กำลังต่อใหม่ใน ${seconds} วิ…`); },
+});
 
 /**
  * GET /api/session — แยกสามสถานะ ไม่ใช่ boolean
@@ -93,6 +109,15 @@ function backToLogin(): void {
   appPage.hidden = true;
   loginPage.hidden = false;
   showStatus(null);
+  // ต้องบอกเหตุผลและพาโฟกัสไปที่ช่องรหัสด้วย ไม่ใช่แค่สลับหน้าเงียบๆ — จากมุมผู้ใช้
+  // จอ terminal หายไปเฉยๆ กลางคันโดยไม่มีใครบอกอะไร แยกไม่ออกเลยว่าแอปพังหรือ
+  // session หมดอายุ (ท่าเดียวกับกิ่ง 'expired' ใน tryResume())
+  noticeEl.textContent = 'เซสชันหมดอายุแล้ว — กรอกรหัสผ่านอีกครั้งเพื่อเข้าใช้งานต่อ';
+  noticeEl.hidden = false;
+  $<HTMLInputElement>('password').focus();
+  // ต้องยกเลิก timer ที่ค้างอยู่ด้วย ไม่งั้น backoff เดิมจะยิง connect() ตอนผู้ใช้
+  // นั่งอยู่หน้า login — connect() จะ return ทันทีเพราะ stopped แต่ backoff จะไม่ถูก reset
+  reconnect.cancel();
 }
 
 /** ตั้งค่าใน initTerminal และใช้ต่อใน bindTouch ซึ่งถูกเรียกหลังจากนั้น */
@@ -787,21 +812,74 @@ async function doPaste(t: Terminal): Promise<void> {
 /** รอ 1 เฟรมให้ layout settle ก่อนวัดขนาด */
 const nextFrame = () => new Promise<void>(r => requestAnimationFrame(() => r()));
 
+/**
+ * ออกจากสถานะที่หยุดถาวร — ทุกจุดที่ตั้ง `stopped = true` ต้องมีปุ่มที่เรียกตัวนี้
+ *
+ * การต่อใหม่ได้ shell ใหม่เสมอ (server spawn PTY ต่อหนึ่งการเชื่อมต่อ) ข้อความบนปุ่ม
+ * จึงต้องไม่สัญญาว่ากู้ของเดิมได้
+ */
+function restart(): void {
+  stopped = false;
+  reconnect.reset();
+  showStatus(null);
+  void connect();
+}
+
 async function connect(): Promise<void> {
   if (stopped || !term || !fitAddon) return;
 
-  // ลำดับนี้สลับกันไม่ได้: ต้อง fit ก่อนจึงจะรู้ cols/rows ที่จะส่งไปกับ ws
-  await nextFrame();
-  fitAddon.fit();
-  const { cols, rows } = term;
+  /*
+   * กัน socket ซ้อน — `visibilitychange` กับ `online` ยิงพร้อมกันได้ และ socket
+   * ตัวที่สองจะทำให้ server เตะตัวแรกด้วย 4000 (`server/index.ts:304`) ซึ่งฝั่งนี้
+   * ตีความว่า "เปิดที่อื่นแล้ว" แล้วตั้ง stopped ถาวร — คือสร้างทางตันอันใหม่
+   * ขึ้นมาเองจากฟีเจอร์ที่มีไว้ปิดทางตัน
+   *
+   * เช็ค `ws` อย่างเดียวไม่พอ: ระหว่างบรรทัดนี้กับตอนที่ `ws = socket` ถูก assign
+   * จริงข้างล่าง มี `await nextFrame()` คั่นอยู่ ซึ่งเปิดช่องให้ caller อีกตัวเข้ามา
+   * เช็ค `ws` ซ้ำได้ก่อนที่ `ws` เดิมจะถูกตั้งค่า (ตอนนั้น `ws` ยังเป็นค่าเก่า/null อยู่)
+   * แล้วก็ผ่าน guard ไปสร้าง socket ที่สองได้เหมือนกัน — ธง `connecting` (sync, ตั้ง
+   * ก่อน await) จึงจำเป็น อย่าลบทิ้งแค่เพราะเห็นว่า `ws` เช็คซ้ำแล้วดูซ้ำซ้อน
+   */
+  if (connecting || (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN))) return;
+  connecting = true;
 
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(`${proto}//${location.host}/pty?cols=${cols}&rows=${rows}`);
-  socket.binaryType = 'arraybuffer';
-  ws = socket;
+  let socket: WebSocket;
+  try {
+    // ลำดับนี้สลับกันไม่ได้: ต้อง fit ก่อนจึงจะรู้ cols/rows ที่จะส่งไปกับ ws
+    await nextFrame();
+    fitAddon.fit();
+    const { cols, rows } = term;
+
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    socket = new WebSocket(`${proto}//${location.host}/pty?cols=${cols}&rows=${rows}`);
+    socket.binaryType = 'arraybuffer';
+    ws = socket;
+  } catch {
+    /*
+     * ห้ามลบ catch นี้ทิ้งเพราะเห็นว่า "สองบรรทัดนี้ไม่น่าจะโยน"
+     *
+     * ทั้ง `fitAddon.fit()` (โยนได้เมื่อวัดขนาดจาก container ที่สูง/กว้างเป็น 0
+     * เช่นตอนแท็บถูกซ่อนหรือ layout ยังไม่ settle) และ `new WebSocket(...)` (โยน
+     * SecurityError เมื่อพอร์ตถูกบล็อก หรือ SyntaxError จาก URL ที่ประกอบไม่ได้)
+     * ล้วนโยนได้จริง และถ้าปล่อยให้หลุดออกไป มันจะไปโผล่เป็น unhandled rejection
+     * ที่ `void connect()` ใน deps ของ reconnect โดยไม่มีใครเห็น
+     *
+     * ที่ร้ายกว่านั้นคือมันฆ่า chain ทิ้งเงียบๆ: `ws` ยังเป็น null จึงไม่มี `onclose`
+     * ตัวไหนได้ยิงเลย และ `onclose` คือ *ที่เดียว* ที่เรียก reconnect.schedule()
+     * ผู้ใช้จะค้างอยู่กับข้อความ "กำลังต่อใหม่ใน N วิ…" ที่ไม่มีวันเกิดขึ้นจริง
+     * ตลอดกาล — ทางตันแบบเดียวกับที่ทั้งสาขานี้มีไว้ปิด
+     *
+     * จึงต้องตั้งนัดครั้งถัดไปเองที่นี่ แทนที่จะรอ onclose ที่ไม่มีทางมา
+     */
+    ws = null;
+    if (!stopped) reconnect.schedule();
+    return;
+  } finally {
+    connecting = false;
+  }
 
   socket.onopen = () => {
-    backoffMs = 1000;
+    reconnect.reset();
     showStatus(null);
     term!.reset();          // PTY ใหม่คือ process ใหม่ ไม่รู้ว่าจออยู่ในสภาพไหน
     resetInputModifiers();
@@ -821,20 +899,31 @@ async function connect(): Promise<void> {
     ws = null;
     if (ev.code === 4000) {
       stopped = true;
-      showStatus('เปิดที่อื่นแล้ว — โหลดหน้านี้ใหม่เพื่อใช้ที่นี่แทน');
+      // sticky: ปุ่มนี้คือทางออกทางเดียวของผู้ใช้ตอนนี้ ห้ามให้ toast ใบไหน
+      // (แนบรูป/วาง/fullscreen ที่แถบปุ่มยังกดได้อยู่) มาทับแล้วลบมันหายไป
+      showStatus('เปิดที่อื่นแล้ว — ใช้ที่นี่แทนได้โดยเริ่ม shell ใหม่', {
+        sticky: true,
+        action: { label: 'ใช้ที่นี่', onClick: restart },
+      });
       return;
     }
     if (ev.code === 1000) {
       const m = /^exit:(-?\d+)$/.exec(ev.reason);
       const code = m ? m[1] : null;
-      let text = 'shell ปิดแล้ว — โหลดหน้านี้ใหม่เพื่อเริ่มใหม่';
+      let text = 'shell ปิดแล้ว';
       if (code !== null) {
-        text = `[process exited: code ${code}] — โหลดหน้านี้ใหม่เพื่อเริ่มใหม่`;
+        text = `[process exited: code ${code}]`;
         if (code === '127') {
           text += ' (127 = หาโปรแกรมไม่เจอ เช็ค SHELL_CMD ใน .env)';
         }
       }
-      showStatus(text);
+      stopped = true;
+      // sticky ด้วยเหตุผลเดียวกับ 4000 ข้างบน — stopped = true แล้วไม่มี timer ไหน
+      // มาต่อให้อีก ปุ่มนี้หายเมื่อไหร่คือเหลือแต่ปุ่ม refresh ของเบราว์เซอร์
+      showStatus(text, {
+        sticky: true,
+        action: { label: 'เริ่ม shell ใหม่', onClick: restart },
+      });
       return;
     }
     void (async () => {
@@ -844,9 +933,7 @@ async function connect(): Promise<void> {
       // เน็ตล่ม (unreachable) ต้อง reconnect ต่อ ไม่งั้นขาดสัญญาณแวบเดียว
       // ก็ต้องพิมพ์รหัสใหม่ ซึ่งคือเคสที่เกิดบ่อยที่สุดของแอปนี้
       if (await checkSession() === 'expired') { backToLogin(); return; }
-      showStatus(`กำลังต่อใหม่ใน ${Math.round(backoffMs / 1000)} วิ…`);
-      setTimeout(() => { void connect(); }, backoffMs);
-      backoffMs = Math.min(backoffMs * 2, 8000);
+      reconnect.schedule();
     })();
   };
 }
@@ -857,6 +944,20 @@ function sendResize(): void {
 }
 
 async function startSession(): Promise<void> {
+  /*
+   * เข้ามารอบสอง (ถูกเด้งไป login แล้วกลับเข้ามา) ต้องไม่สร้าง Terminal ตัวใหม่ทับ
+   * ของเดิม — ไม่มี teardown ให้เรียก ของเก่าจึงค้างอยู่ในหน้าและใน DOM ตลอดไป
+   * เมื่อมี Terminal อยู่แล้วก็แค่สลับหน้ากลับมาแล้วต่อใหม่พอ
+   */
+  if (term) {
+    stopped = false;
+    loginPage.hidden = true;
+    appPage.hidden = false;
+    reconnect.reset();
+    await connect();
+    return;
+  }
+
   stopped = false;
   loginPage.hidden = true;
   appPage.hidden = false;          // ต้องแสดงก่อน terminal จึงจะมีขนาดจริง
@@ -875,12 +976,25 @@ async function startSession(): Promise<void> {
     created.keybar.onViewportFrame(frame.height);
   });
   window.addEventListener('orientationchange', created.keybar.onOrientationChange);
+
+  // timer ของแท็บที่ถูกซ่อนถูก throttle จนหยุด — ถ้าไม่ปลุกตรงนี้ ผู้ใช้ที่สลับแอป
+  // กลับมาจะนั่งมองจอนิ่งรอ timer ที่ควรยิงไปนานแล้ว ซึ่งแยกไม่ออกจากอาการค้าง
+  //
+  // สองบรรทัดนี้ผูกอยู่กับ early return `if (term)` ด้านบนสุดของฟังก์ชันนี้ —
+  // ถ้าใครลบ early return นั้นออกในอนาคต การเข้า startSession() รอบสองจะมาลงทะเบียน
+  // listener คู่นี้ซ้ำอีกชุด แล้ว visibilitychange/online หนึ่งครั้งจะยิง connect() สองครั้งพร้อมกัน
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') reconnect.wake();
+  });
+  window.addEventListener('online', () => { reconnect.wake(); });
+
   await connect();
 }
 
 $('login-form').addEventListener('submit', async e => {
   e.preventDefault();
   errorEl.hidden = true;
+  noticeEl.hidden = true;
   const password = $<HTMLInputElement>('password').value;
 
   let res: Response;
@@ -896,7 +1010,7 @@ $('login-form').addEventListener('submit', async e => {
     return;
   }
 
-  if (res.ok) { await startSession(); return; }
+  if (res.ok) { strandedRetry.cancel(); await startSession(); return; }
   if (res.status === 429) {
     errorEl.textContent = 'ลองผิดบ่อยเกินไป รอสักครู่แล้วลองใหม่';
   } else if (res.status === 401) {
@@ -907,10 +1021,78 @@ $('login-form').addEventListener('submit', async e => {
   errorEl.hidden = false;
 });
 
-// ตอนโหลดหน้า: cookie 30 วันมีประโยชน์ก็ต่อเมื่อเช็คตอน mount — ไม่งั้นต้อง
-// พิมพ์รหัสทุกครั้งที่เปิดหน้าเว็บทั้งที่ cookie ยังไม่หมดอายุ
-void (async () => {
-  // ตอนโหลดหน้าเข้า session ต่อเฉพาะเมื่อ 'valid' — 'unreachable' ให้แสดง
-  // หน้า login ไว้ก่อน ปลอดภัยกว่าเข้า terminal ที่ต่อ ws ไม่ได้อยู่ดี
-  if (await checkSession() === 'valid') await startSession();
-})();
+// ธงกันเรียกซ้อน — `visibilitychange` กับ `online` ยิงพร้อมกันได้ (ดูคอมเมนต์
+// เดียวกันใน connect()) และตอนนี้ยังมี timer ลองใหม่เองที่อาจตื่นพร้อมกับทั้งคู่ได้
+// อีกทาง ถ้าไม่กันไว้ สอง tryResume() ที่ทับซ้อนกันอาจแข่งกันเรียก startSession()
+// ซึ่งบังเอิญปลอดภัยอยู่ตอนนี้เพราะ startSession() ตั้งค่า `term` ก่อน await ตัวแรก
+// (ตัวที่แพ้จะเจอ early return `if (term)`) — นั่นคือความบังเอิญของลำดับ statement
+// ไม่ใช่สัญญา ถ้าใครแทรก await ไว้ก่อนบรรทัดตั้งค่า `term` ในอนาคต การพึ่งพาลำดับ
+// เดิมจะพังทันที ธง `resuming` นี้จึงต้องอยู่ ไม่ให้เรียกซ้อนได้ตั้งแต่ต้นทาง
+let resuming = false;
+
+/**
+ * timer ลองเข้า session เองตอนติดอยู่หน้า login — ตรรกะจับเวลาอยู่ใน stranded-retry.ts
+ *
+ * เงื่อนไข "ยังติดอยู่หน้า login จริงไหม" อยู่ที่นี่ทั้งคู่โดยตั้งใจ ไม่ใช่ในโมดูล
+ * เพราะโมดูลไม่ควรรู้จัก DOM ของหน้านี้ และเพราะมันเป็นทางกัน timer รั่วข้ามการ
+ * login ที่สำเร็จ: `tryResume()` เรียก `cancel()` แล้วค่อย `await startSession()`
+ * ถ้านัดของ timer มาตกในช่วง await นั้นพอดี การต่อนัดแบบไม่มีเงื่อนไขจะทำให้ timer
+ * มีชีวิตรอดข้ามการ login ไปยิง tryResume() เปล่าๆ ทีหลังทั้งที่เข้า session ได้แล้ว
+ */
+const strandedRetry = createStrandedRetry({
+  // `!loginPage.hidden` = ยังติดอยู่หน้า login จริง — เข้า session ไปแล้วให้เงียบ
+  attempt: () => { resumeIfStranded(); },
+  busy: () => !loginPage.hidden && resuming,
+});
+
+/**
+ * พยายามเข้า session ด้วย cookie ที่มีอยู่
+ *
+ * แยก `'unreachable'` ออกจาก `'expired'` เป็นเรื่องคอขาดบาดตายของแอปนี้: เน็ตมือถือ
+ * ที่ยังไม่กลับมาตอนโหลดหน้าไม่ได้แปลว่า cookie หมดอายุ ก่อนหน้านี้ทั้งสองกรณีจบที่
+ * หน้า login เหมือนกันโดยไม่มีทางออก ผู้ใช้จึงต้องไปหาปุ่ม refresh ของเบราว์เซอร์เอง
+ * ทั้งที่กด refresh แล้วเข้าได้ทันทีโดยไม่ต้องกรอกอะไร
+ *
+ * เคสที่พบบ่อยที่สุดจริงๆ ของโปรเจกต์นี้คือ *server* ต่อไม่ติด (Tailscale route
+ * กระตุก หรือ process server ล่ม) ทั้งที่ Wi-Fi ของมือถือไม่เคยหลุดเลยและแท็บก็เปิด
+ * อยู่ตลอด — เหตุการณ์ `online` จึงไม่มีวันยิงในเคสนี้ ต้องมี timer ลองเองด้วย ไม่งั้น
+ * ข้อความ "จะลองใหม่ให้เอง" จะเป็นคำสัญญาที่ไม่มีวันเกิดขึ้นจริง
+ */
+async function tryResume(): Promise<void> {
+  if (resuming) return;
+  resuming = true;
+  retryEl.disabled = true;
+  noticeEl.hidden = true;
+  try {
+    const state = await checkSession();
+    if (state === 'valid') {
+      strandedRetry.cancel();
+      await startSession();
+      return;
+    }
+    if (state === 'unreachable') {
+      noticeEl.textContent = 'ต่อ server ไม่ได้ — จะลองใหม่ให้เองอีกสักครู่';
+      noticeEl.hidden = false;
+      strandedRetry.schedule();
+      return;
+    }
+    // 'expired' — ต้องกรอกรหัสจริงๆ พาโฟกัสไปที่ช่องรหัสให้เลย ไม่ต้องลองเองอีก
+    strandedRetry.cancel();
+    $<HTMLInputElement>('password').focus();
+  } finally {
+    retryEl.disabled = false;
+    resuming = false;
+  }
+}
+
+retryEl.addEventListener('click', () => { void tryResume(); });
+
+// ลองใหม่เองเมื่อหน้ากลับมาเห็นหรือเน็ตกลับมา — เฉพาะตอนยังติดอยู่ที่หน้า login
+// ถ้าเข้า session ไปแล้ว `reconnect.wake()` ใน startSession เป็นคนดูแลแทน
+const resumeIfStranded = (): void => { if (!loginPage.hidden) void tryResume(); };
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') resumeIfStranded();
+});
+window.addEventListener('online', resumeIfStranded);
+
+void tryResume();

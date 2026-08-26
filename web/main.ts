@@ -1012,11 +1012,27 @@ function cancelStrandedRetry(): void {
 
 function scheduleStrandedRetry(): void {
   if (strandedRetryTimer !== null) return; // มีนัดอยู่แล้ว ไม่ต้องซ้อน
-  strandedRetryTimer = setTimeout(() => {
-    strandedRetryTimer = null;
-    strandedRetryDelay = Math.min(strandedRetryDelay * 2, STRANDED_RETRY_MAX_MS);
-    void tryResume();
-  }, strandedRetryDelay);
+  strandedRetryTimer = setTimeout(fireStrandedRetry, strandedRetryDelay);
+}
+
+function fireStrandedRetry(): void {
+  strandedRetryTimer = null;
+  // ถ้ามี tryResume() อีกตัวกำลังวิ่งอยู่พอดี (กดปุ่ม / visibilitychange / online
+  // ชนกับนัดของ timer เอง) `tryResume()` ด้านล่างจะเจอ `resuming` แล้ว return ทันที
+  // โดยไม่ทันเข้าไปถึงกิ่ง 'unreachable' ที่เป็นจุดเดียวที่ตั้งนัดครั้งถัดไป — ถ้าปล่อย
+  // ผ่านไปเฉยๆ ตรงนี้ chain จะตายเงียบ: timer หมดอายุไปแล้ว ไม่มีใครตั้งนัดใหม่ให้อีก
+  // ทั้งที่ notice บนจอยังพูดว่า "จะลองใหม่ให้เอง" อยู่ ต้องมองว่า early return ของ
+  // `resuming` แบบนี้ไม่ใช่ "งานเสร็จแล้ว ไม่ต้องทำอะไรต่อ" แต่คือ "ยังไม่ได้ลองจริง"
+  // จึงต้องตั้งนัดใหม่แทนตัวที่เพิ่งหมดอายุไปเสมอ ด้วย delay เดิม (ไม่ doubled เพราะ
+  // รอบนี้ไม่นับเป็นความพยายามที่ล้มเหลวจริง แค่ชนกับตัวอื่นที่กำลังทำงานอยู่) —
+  // เรียกฟังก์ชันตัวเองซ้ำได้เรื่อยๆ ถ้าชนซ้ำหลายครั้งติดกัน โดยไม่มีทางตั้ง timer
+  // ซ้อนสองตัวเพราะ `strandedRetryTimer` ถูก null ไว้ก่อนเช็คเสมอ
+  if (resuming) {
+    strandedRetryTimer = setTimeout(fireStrandedRetry, strandedRetryDelay);
+    return;
+  }
+  strandedRetryDelay = Math.min(strandedRetryDelay * 2, STRANDED_RETRY_MAX_MS);
+  void tryResume();
 }
 
 /**

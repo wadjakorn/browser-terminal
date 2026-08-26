@@ -54,7 +54,13 @@ const fullscreen = createFullscreenController(document);
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let ws: WebSocket | null = null;
-let stopped = false;   // true เมื่อถูกเตะด้วย code 4000 — ห้าม reconnect
+// true เมื่ออยู่ในสถานะหยุดถาวร (โดนเตะด้วย 4000, shell ปิดเอง (code 1000), หรือ
+// session หมดอายุผ่าน backToLogin) — ห้าม reconnect อัตโนมัติ จนกว่าจะถูกล้างโดย
+// restart() หรือการเข้า startSession() ใหม่
+let stopped = false;
+// กันสอง caller เข้า connect() พร้อมกันในช่วงระหว่างเช็ค ws กับตอนที่ ws ถูก assign
+// จริง (มี `await nextFrame()` คั่นกลาง — ดูคอมเมนต์ที่จุดใช้งานใน connect())
+let connecting = false;
 let resetInputModifiers: () => void = () => {};
 
 const status = createStatus({
@@ -816,18 +822,30 @@ async function connect(): Promise<void> {
    * ตัวที่สองจะทำให้ server เตะตัวแรกด้วย 4000 (`server/index.ts:304`) ซึ่งฝั่งนี้
    * ตีความว่า "เปิดที่อื่นแล้ว" แล้วตั้ง stopped ถาวร — คือสร้างทางตันอันใหม่
    * ขึ้นมาเองจากฟีเจอร์ที่มีไว้ปิดทางตัน
+   *
+   * เช็ค `ws` อย่างเดียวไม่พอ: ระหว่างบรรทัดนี้กับตอนที่ `ws = socket` ถูก assign
+   * จริงข้างล่าง มี `await nextFrame()` คั่นอยู่ ซึ่งเปิดช่องให้ caller อีกตัวเข้ามา
+   * เช็ค `ws` ซ้ำได้ก่อนที่ `ws` เดิมจะถูกตั้งค่า (ตอนนั้น `ws` ยังเป็นค่าเก่า/null อยู่)
+   * แล้วก็ผ่าน guard ไปสร้าง socket ที่สองได้เหมือนกัน — ธง `connecting` (sync, ตั้ง
+   * ก่อน await) จึงจำเป็น อย่าลบทิ้งแค่เพราะเห็นว่า `ws` เช็คซ้ำแล้วดูซ้ำซ้อน
    */
-  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+  if (connecting || (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN))) return;
+  connecting = true;
 
-  // ลำดับนี้สลับกันไม่ได้: ต้อง fit ก่อนจึงจะรู้ cols/rows ที่จะส่งไปกับ ws
-  await nextFrame();
-  fitAddon.fit();
-  const { cols, rows } = term;
+  let socket: WebSocket;
+  try {
+    // ลำดับนี้สลับกันไม่ได้: ต้อง fit ก่อนจึงจะรู้ cols/rows ที่จะส่งไปกับ ws
+    await nextFrame();
+    fitAddon.fit();
+    const { cols, rows } = term;
 
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(`${proto}//${location.host}/pty?cols=${cols}&rows=${rows}`);
-  socket.binaryType = 'arraybuffer';
-  ws = socket;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    socket = new WebSocket(`${proto}//${location.host}/pty?cols=${cols}&rows=${rows}`);
+    socket.binaryType = 'arraybuffer';
+    ws = socket;
+  } finally {
+    connecting = false;
+  }
 
   socket.onopen = () => {
     reconnect.reset();
@@ -922,6 +940,10 @@ async function startSession(): Promise<void> {
 
   // timer ของแท็บที่ถูกซ่อนถูก throttle จนหยุด — ถ้าไม่ปลุกตรงนี้ ผู้ใช้ที่สลับแอป
   // กลับมาจะนั่งมองจอนิ่งรอ timer ที่ควรยิงไปนานแล้ว ซึ่งแยกไม่ออกจากอาการค้าง
+  //
+  // สองบรรทัดนี้ผูกอยู่กับ early return `if (term)` ด้านบนสุดของฟังก์ชันนี้ —
+  // ถ้าใครลบ early return นั้นออกในอนาคต การเข้า startSession() รอบสองจะมาลงทะเบียน
+  // listener คู่นี้ซ้ำอีกชุด แล้ว visibilitychange/online หนึ่งครั้งจะยิง connect() สองครั้งพร้อมกัน
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') reconnect.wake();
   });

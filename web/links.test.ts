@@ -228,13 +228,22 @@ describe('createLinkOpener', () => {
 
   it('คลิกเมาส์จริงบนลิงก์ = เปิดลิงก์และกลืนอีเวนต์', () => {
     const { open, opener } = setup(['see https://a.io/x ok']);
-    expect(opener.handleMouseDown(AT_URL)).toBe(true);
+    expect(opener.handleMouseDown(AT_URL, 0)).toBe(true);
     expect(open).toHaveBeenCalledWith('https://a.io/x');
   });
 
   it('คลิกเมาส์จริงตรงข้อความธรรมดา = ปล่อยผ่านให้ xterm', () => {
     const { open, opener } = setup(['see https://a.io/x ok']);
-    expect(opener.handleMouseDown(AT_TEXT)).toBe(false);
+    expect(opener.handleMouseDown(AT_TEXT, 0)).toBe(false);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('คลิกขวาบนลิงก์ = ไม่เปิดลิงก์ ปล่อยให้ mouse report ไปถึง TUI', () => {
+    // ปุ่ม RMB ยิง MouseEvent สังเคราะห์ที่ target เดียวกับเมาส์จริง มันจึงวิ่งผ่าน
+    // listener เฟส capture ตัวนี้ด้วย ถ้าไม่กรอง button ที่นี่ คลิกขวาบนลิงก์จะกลาย
+    // เป็นการเปิดแท็บใหม่ และ arm ก็ถูกใช้ทิ้งไปโดยที่ TUI ไม่ได้รับอะไรเลย
+    const { open, opener } = setup(['see https://a.io/x ok']);
+    expect(opener.handleMouseDown(AT_URL, 2)).toBe(false);
     expect(open).not.toHaveBeenCalled();
   });
 });

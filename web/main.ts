@@ -29,6 +29,7 @@ import { createFullscreenController } from './fullscreen.js';
 import { cellChar, createLinkOpener, type LinkOpener } from './links.js';
 import { createReconnect } from './reconnect.js';
 import { createStrandedRetry } from './stranded-retry.js';
+import { createPointerArm } from './pointer-arm.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -132,6 +133,24 @@ let linkPort: TerminalPort | null = null;
  */
 let syncHandles: () => void = () => {};
 
+/**
+ * arm ของปุ่ม RMB — แตะปุ่มหนึ่งครั้ง แตะจอครั้งถัดไปกลายเป็นคลิกขวา
+ *
+ * อยู่ที่ module scope ด้วยเหตุผลเดียวกับ syncHandles: bindTouch เป็นคนใช้ค่านี้
+ * แต่ปุ่มที่ตั้งค่ามันอยู่ใน closure ของ initTerminal
+ */
+const pointerArm = createPointerArm();
+
+/**
+ * ทาสีปุ่มในแถบใหม่ — ตั้งค่าจริงใน initTerminal เหตุผลเดียวกับ syncHandles
+ *
+ * ต้องเรียกทุกครั้งที่ pointerArm เปลี่ยนสถานะจากนอกตัวปุ่มเอง อย่าหวังพึ่ง
+ * t.onData → keybar.refresh() ที่มีอยู่: มันทำงานก็ต่อเมื่อ mouse reporting เปิด
+ * (mouse report ออกไปเป็น data event) ส่วนตอนปิด — ซึ่งคือตอนที่ไม่มีอะไรเกิดขึ้น
+ * และผู้ใช้สับสนที่สุด — ปุ่มจะติดไฟค้าง
+ */
+let refreshKeybar: () => void = () => {};
+
 function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar } {
   const t = new Terminal({
     fontFamily: 'ui-monospace, monospace',
@@ -197,9 +216,17 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     onAction: action => {
       if (action === 'select-mode') selection?.toggle();
       else if (action === 'attach-image') pickImage();
+      // RMB เป็นของโหมดปกติเท่านั้น — ในโหมดเลือก selectionOwnsTouch ยึดการแตะ
+      // นิ้วเดียวทุกครั้งก่อนถึง recognizer จึงไม่มีทางที่ arm จะถูกใช้ ปล่อยให้กดได้
+      // เท่ากับปุ่มติดไฟค้างโดยไม่มีวันเกิดอะไรขึ้น
+      else if (action === 'right-click') { if (!selection?.active()) pointerArm.toggle(); }
       else void doPaste(t);
     },
-    actionState: action => action === 'select-mode' && (selection?.active() ?? false),
+    actionState: action => {
+      if (action === 'select-mode') return selection?.active() ?? false;
+      if (action === 'right-click') return pointerArm.armed();
+      return false;
+    },
     modifierState: () => pipeline.modifierState(),
     onToggleKeyboard: () => {
       if (keyboardVisible()) dispatchTerminalFocus('request-ime-close');
@@ -246,6 +273,8 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       requestAnimationFrame(() => { sendResize(); syncHandles(); });
     },
   });
+
+  refreshKeybar = () => keybar.refresh();
 
   fullscreen.subscribe(() => {
     keybar.syncFullscreen();
@@ -383,6 +412,7 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       el.classList.toggle('selecting', active);
       if (active) {
         stopGestures?.();
+        void pointerArm.consume();
         // Ctrl ที่ค้างอยู่จะไปยิงใส่ปุ่มถัดไปที่ไม่เกี่ยวกันเลยหลังออกจากโหมด
         pipeline.clearModifiers();
         dispatchTerminalFocus('selection-entered');
@@ -558,6 +588,7 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     emit: g => {
       switch (g.kind) {
         case 'wheel':
+          if (pointerArm.consume()) refreshKeybar();   // เหตุผลเดียวกับ dragStart
           // deltaMode 1 = บรรทัด ไม่ใช่พิกเซล — ตั้งใจ: ถ้าส่งเป็น px ที่ < 50
           // xterm จะเดาว่าเป็น trackpad แล้วคูณ 0.3 ทิ้ง (CoreMouseService:257)
           // ทำให้ต้องลากไกลกว่าที่ควร 3 เท่ากว่าจอจะขยับ
@@ -567,6 +598,16 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
           return;
 
         case 'tap': {
+          // arm ของปุ่ม RMB มาก่อนทุกอย่าง รวมถึงลิงก์ — คลิกขวาบนลิงก์ต้องถึง TUI
+          // ไม่ใช่เปิดแท็บใหม่ (ยามอีกชั้นอยู่ใน links.ts เพราะ mousedown สังเคราะห์
+          // ยังวิ่งผ่าน listener เฟส capture ของเมาส์จริงด้วย)
+          if (pointerArm.consume()) {
+            refreshKeybar();
+            target.dispatchEvent(new MouseEvent('mousedown', mouseInit(g.x, g.y, { button: 2, buttons: 2 })));
+            target.dispatchEvent(new MouseEvent('mouseup', mouseInit(g.x, g.y, { button: 2, buttons: 0 })));
+            return;
+          }
+
           // แตะ = คลิกซ้ายให้ TUI (เลือก pane ใน herdr) เว้นแต่แตะโดนลิงก์
           //
           // xterm อาจโฟกัส textarea ของตัวเองระหว่าง synthetic click แต่
@@ -594,6 +635,9 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
         // ต้องตั้ง buttons: 1 บน mousemove ด้วย ไม่ใช่แค่ mousedown — ไม่งั้น xterm
         // เข้ารหัสเป็น "เลื่อนเมาส์เฉยๆ" ไม่ใช่ "ลากทั้งที่กดปุ่มอยู่" แล้ว TUI จะไม่ลาก
         case 'dragStart': {
+          // arm อยู่ได้จนกว่าจะมีท่าทางอะไรก็ตามเกิดขึ้น — ไม่งั้นคนที่ arm แล้วเผลอ
+          // กดค้างจะเหลือ arm ค้างไปกินการแตะครั้งถัดไปที่ตั้งใจให้เป็นคลิกซ้าย
+          if (pointerArm.consume()) refreshKeybar();
           // xterm อาจโฟกัส helper textarea ระหว่าง mousedown แต่ physical mode
           // กัน IME ไว้ด้วย inputMode="none" จึงปลอดภัยที่จะคง focus ไว้
           // mouse reporting ยังส่งต่อได้ตามเดิม — listener ของการลากอยู่ที่
@@ -662,7 +706,7 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
   // ดักในเฟส capture เพื่อกลืนอีเวนต์ก่อนถึง xterm เมื่อมีลิงก์อยู่ใต้เคอร์เซอร์
   // ให้พฤติกรรมตรงกับการแตะ: คลิกลิงก์ = เปิดลิงก์อย่างเดียว ไม่สลับ pane
   target.addEventListener('mousedown', e => {
-    if (!linkOpener?.handleMouseDown(cellAt(e.clientX, e.clientY))) return;
+    if (!linkOpener?.handleMouseDown(cellAt(e.clientX, e.clientY), e.button)) return;
     e.preventDefault();
     e.stopPropagation();
   }, { capture: true });

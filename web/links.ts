@@ -295,8 +295,13 @@ export interface LinkOpener {
    * คืน true เมื่อเปิดลิงก์ไปแล้ว (กลืนการแตะ) · false เมื่อควรคลิกตามปกติ
    */
   handleTap(cell: Cell | null, click: () => void): boolean;
-  /** คลิกด้วยเมาส์จริง คืน true เมื่อเปิดลิงก์แล้วและควรกลืนอีเวนต์ทิ้ง */
-  handleMouseDown(cell: Cell | null): boolean;
+  /**
+   * คลิกด้วยเมาส์จริง คืน true เมื่อเปิดลิงก์แล้วและควรกลืนอีเวนต์ทิ้ง
+   *
+   * `button` ตามกติกาของ `MouseEvent.button` — เฉพาะปุ่มซ้าย (0) เท่านั้นที่เปิดลิงก์
+   * ปุ่มขวาต้องผ่านไปถึง TUI ให้ mouse reporting เข้ารหัสส่งต่อ ไม่ใช่เปิดแท็บใหม่
+   */
+  handleMouseDown(cell: Cell | null, button: number): boolean;
 }
 
 export function createLinkOpener({ open, terminal }: LinkOpenerDeps): LinkOpener {
@@ -314,7 +319,8 @@ export function createLinkOpener({ open, terminal }: LinkOpenerDeps): LinkOpener
       return true;
     },
 
-    handleMouseDown(cell) {
+    handleMouseDown(cell, button) {
+      if (button !== 0) return false;
       const url = urlAt(cell);
       if (url === null) return false;
       open(url);

@@ -8,7 +8,7 @@ export type KeyCategory = 'core' | 'navigation' | 'editing' | 'symbols' | 'funct
  * แยกออกจาก BarKey โดยตั้งใจ: BarKey คือเส้นทางไบต์ที่ถือว่า security-critical
  * มันไม่ควรรู้จักโหมดของ UI เลย ปุ่มที่มี action จะไม่ผ่าน input-pipeline
  */
-export type KeyAction = 'select-mode' | 'paste' | 'attach-image';
+export type KeyAction = 'select-mode' | 'paste' | 'attach-image' | 'right-click';
 export type KeyUtility = 'settings' | 'fullscreen';
 
 /**
@@ -138,6 +138,22 @@ export const KEY_CATALOG: readonly KeySpec[] = [
   { id: 'tilde', label: '~', title: 'Tilde', category: 'symbols', key: { kind: 'literal', data: '~' }, defaultVisible: true, defaultOrder: 130 },
   { id: 'slash', label: '/', title: 'Slash', category: 'symbols', key: { kind: 'literal', data: '/' }, defaultVisible: true, defaultOrder: 140 },
   { id: 'dash', label: '-', title: 'Dash', category: 'symbols', key: { kind: 'literal', data: '-' }, defaultVisible: true, defaultOrder: 150 },
+  /**
+   * `defaultVisible: false` มีผลเฉพาะเครื่องที่ไม่เคยเปิดแอป — ผู้ใช้เดิมจะเห็นปุ่มนี้
+   * โผล่มาเอง เพราะ `hiddenSet` ใน normalizeKeybarPreferences สร้างจาก `hidden` ที่
+   * บันทึกไว้เท่านั้น id ใหม่ไม่อยู่ในนั้นจึงถูกแทรกเข้ากลุ่มที่มองเห็น (มีเทสต์คุมไว้)
+   *
+   * ตำแหน่งคือสิ่งเดียวที่ควบคุมได้จริง จึงวางไว้หลังปุ่มที่เปิดโดยปริยายทุกตัว (dash=150)
+   * ผู้ใช้เดิมจะได้มันต่อท้ายแถบ ไม่ไปเบียดปุ่มที่ใช้ทุกวัน
+   *
+   * ห้ามย้ายมาก่อน 150: catalog ต้องเรียงตาม defaultOrder และปุ่มที่เปิดโดยปริยาย
+   * ต้องเป็น prefix ของ ALL_KEY_IDS — มีเทสต์คุมไว้ใน key-definitions.test.ts
+   */
+  {
+    id: 'right-click', label: 'RMB', title: 'คลิกขวา — แตะปุ่มนี้แล้วแตะบนจอหนึ่งครั้ง',
+    category: 'core', action: 'right-click', toggle: true,
+    defaultVisible: false, defaultOrder: 160,
+  },
   literalKey('page-up', 'PgUp', '\x1b[5~', 'navigation', 210, 'Page Up'),
   literalKey('page-down', 'PgDn', '\x1b[6~', 'navigation', 220, 'Page Down'),
   literalKey('home', 'Home', '\x1b[H', 'navigation', 230, 'Home'),

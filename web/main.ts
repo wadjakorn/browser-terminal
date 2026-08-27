@@ -30,6 +30,7 @@ import { cellChar, createLinkOpener, type LinkOpener } from './links.js';
 import { createReconnect } from './reconnect.js';
 import { createStrandedRetry } from './stranded-retry.js';
 import { createPointerArm } from './pointer-arm.js';
+import { suppressesContextMenu } from './context-menu.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -710,6 +711,15 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     e.preventDefault();
     e.stopPropagation();
   }, { capture: true });
+
+  // เมาส์จริงบนเดสก์ท็อป: กดเมนูของเบราว์เซอร์ทิ้งเฉพาะตอนที่ TUI ขอปุ่มเมาส์ไว้
+  //
+  // ผูกที่ el ไม่ใช่ target และไม่ใช่เฟส capture — ต้องให้ handler ของ xterm
+  // (ผูกกับ contextmenu เหมือนกัน) ได้ทำงานก่อน มันเป็นตัวเติม textarea ให้เมนู
+  // พร้อมคัดลอก ซึ่งเป็นเรื่องที่ยังต้องเกิดในโหมด none
+  el.addEventListener('contextmenu', e => {
+    if (suppressesContextMenu(t.modes.mouseTrackingMode)) e.preventDefault();
+  });
 
   el.addEventListener('touchstart', e => {
     e.preventDefault();          // กันเบราว์เซอร์สังเคราะห์ mouse/โฟกัส/ซูมหน้าเว็บเอง

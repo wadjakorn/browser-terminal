@@ -855,8 +855,12 @@ async function doPaste(t: Terminal): Promise<void> {
   // ออกจากโหมดเลือกก่อน ไม่งั้น xterm จะล้าง selection ทิ้งทันทีที่มี user input
   if (selection?.active()) selection.cancel();
 
-  const result = await clipboard.read();
-  if (result.ok) { t.paste(result.text); return; }
+  const result = await clipboard.readContent();
+  if (result.ok) {
+    if (result.kind === 'image') void sendImage(t, result.blob);
+    else t.paste(result.text);
+    return;
+  }
 
   showStatus(result.reason === 'denied'
     ? 'ไม่ได้รับอนุญาตให้อ่านคลิปบอร์ด — ใช้ปุ่มวางของคีย์บอร์ดแทน'

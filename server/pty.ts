@@ -23,6 +23,21 @@ export function parseDims(url: string): { cols: number; rows: number } {
   return cols !== null && rows !== null ? { cols, rows } : { ...DEFAULT_DIMS };
 }
 
+/**
+ * คำตอบของ liveness ping จากหน้าเว็บ — `null` = ไม่ใช่ ping หรือ nonce ผิดรูป (เมินทิ้ง)
+ *
+ * มีไว้ให้หน้าเว็บที่กลับมาจากเบื้องหลังรู้ว่าสายยังเป็นอยู่จริง ping/pong ระดับโปรโตคอล
+ * ที่ keepalive ใช้ JavaScript มองไม่เห็น และ socket ที่ TCP ตายเงียบยังรายงานว่า OPEN
+ * อยู่ได้หลายนาที ตอบ nonce เดิมกลับไปเพื่อให้แยกได้จาก frame เก่าที่ค้างในบัฟเฟอร์
+ * ไม่แตะ PTY และไม่สะท้อนค่าอื่นจาก client กลับไป
+ */
+export function pongFor(msg: unknown): string | null {
+  if (typeof msg !== 'object' || msg === null) return null;
+  const { t, n } = msg as { t?: unknown; n?: unknown };
+  if (t !== 'ping' || !Number.isSafeInteger(n) || (n as number) < 0) return null;
+  return JSON.stringify({ t: 'pong', n });
+}
+
 export function attachPty(ws: WebSocket, opts: PtyOptions): { pid: number } {
   const [cmd, ...args] = opts.shellCmd.split(/\s+/) as [string, ...string[]];
 
@@ -78,6 +93,11 @@ export function attachPty(ws: WebSocket, opts: PtyOptions): { pid: number } {
     // text frame = control JSON
     try {
       const msg = JSON.parse(raw.toString());
+      const pong = pongFor(msg);
+      if (pong !== null) {
+        if (ws.readyState === ws.OPEN) ws.send(pong);
+        return;
+      }
       if (msg?.t === 'resize') {
         const cols = dim(String(msg.cols));
         const rows = dim(String(msg.rows));

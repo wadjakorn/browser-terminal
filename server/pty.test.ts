@@ -1,6 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import { WebSocketServer, WebSocket } from 'ws';
-import { attachPty, parseDims } from './pty.js';
+import { attachPty, parseDims, pongFor } from './pty.js';
+
+describe('pongFor', () => {
+  it('ตอบ nonce เดิมกลับไป', () =>
+    expect(JSON.parse(pongFor({ t: 'ping', n: 42 })!)).toEqual({ t: 'pong', n: 42 }));
+  it('ไม่ใช่ ping → null', () =>
+    expect(pongFor({ t: 'resize', cols: 80, rows: 24 })).toBeNull());
+  it.each([undefined, -1, 1.5, '7', Number.MAX_SAFE_INTEGER + 1, null])(
+    'nonce ผิดรูป (%s) → null — ไม่สะท้อนค่าแปลกจาก client กลับไป',
+    n => expect(pongFor({ t: 'ping', n })).toBeNull(),
+  );
+  it('ไม่ใช่ object → null', () => {
+    expect(pongFor(null)).toBeNull();
+    expect(pongFor('ping')).toBeNull();
+  });
+});
 
 describe('parseDims', () => {
   it('อ่าน cols/rows จาก query', () =>
@@ -89,6 +104,17 @@ describe('attachPty', () => {
     await new Promise(r => setTimeout(r, 300));
     client.send(Buffer.from('stty size\n'));
     expect(await until(() => out.text().includes('40 100'))).toBe(true);
+    client.close(); await close();
+  }, 15000);
+
+  it('control frame ping ได้ pong เป็น text frame และไม่เข้า PTY', async () => {
+    const { server, client, close } = await pair();
+    const texts: string[] = [];
+    client.on('message', (d, isBinary) => { if (!isBinary) texts.push(d.toString()); });
+    attachPty(server, { shellCmd: 'bash', cols: 80, rows: 24 });
+    client.send(JSON.stringify({ t: 'ping', n: 7 }));
+    expect(await until(() => texts.length > 0)).toBe(true);
+    expect(JSON.parse(texts[0]!)).toEqual({ t: 'pong', n: 7 });
     client.close(); await close();
   }, 15000);
 

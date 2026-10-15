@@ -32,6 +32,8 @@ import { createStrandedRetry } from './stranded-retry.js';
 import { createPointerArm } from './pointer-arm.js';
 import { suppressesContextMenu } from './context-menu.js';
 import { terminalOptions } from './terminal-options.js';
+import { checkSession } from './session-check.js';
+import { createLiveness } from './liveness.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -86,24 +88,43 @@ const reconnect = createReconnect({
   onWait: seconds => { showStatus(`กำลังต่อใหม่ใน ${seconds} วิ…`); },
 });
 
-/**
- * GET /api/session — แยกสามสถานะ ไม่ใช่ boolean
- *
- * 'valid' / 'expired' / 'unreachable' ต้องแยกกัน เพราะเน็ตมือถือสะดุดคือ
- * สถานการณ์อันดับหนึ่งของแอปนี้ ถ้ารวม "เน็ตล่ม" เข้ากับ "session หมดอายุ"
- * ผู้ใช้จะถูกเด้งกลับหน้า login ทุกครั้งที่ขาดสัญญาณ ทั้งที่ cookie ยังใช้ได้
- */
-type SessionState = 'valid' | 'expired' | 'unreachable';
+/** true ระหว่างต่อใหม่เพราะ liveness ตัดสินว่าสายตาย — onopen ใช้บอกผู้ใช้ว่าทำไมจอเพิ่ง reset */
+let revivedFromDeadSocket = false;
 
-async function checkSession(): Promise<SessionState> {
-  try {
-    const res = await fetch('/api/session');
-    if (res.ok) return 'valid';
-    if (res.status === 401) return 'expired';
-    return 'unreachable';   // 5xx = server มีปัญหา ไม่ใช่ session หมดอายุ
-  } catch {
-    return 'unreachable';   // fetch โยน = เน็ตล่ม ต้อง reconnect ต่อ ไม่ใช่เด้ง login
+const liveness = createLiveness<WebSocket>({
+  onDead: socket => {
+    // ต้องเช็คตัวตน: ถ้า onclose จริงมาถึงระหว่างรอแล้ว reconnect ได้ socket ใหม่ไปแล้ว
+    // การตัดสินนี้เป็นของตัวเก่า ห้ามไปฆ่าตัวใหม่ที่ดีอยู่แล้วสร้าง PTY ที่สอง
+    if (socket !== ws || stopped) return;
+    // ปลดก่อนปิด — onclose/onmessage ของมันจะถูกเมินด้วย identity check รวมถึง 4000
+    // ที่ server จะเตะมันทิ้งเมื่อ socket ใหม่ต่อเข้าไป (ไม่งั้นกลายเป็น "เปิดที่อื่นแล้ว")
+    ws = null;
+    try { socket.close(); } catch { /* ปิดไม่ได้ก็ไม่เป็นไร ปลดไปแล้ว */ }
+    revivedFromDeadSocket = true;
+    reconnect.cancel();
+    reconnect.reset();
+    void connect();
+  },
+});
+
+/**
+ * หน้ากลับมาแสดงผล / เน็ตกลับมา — ทำให้แน่ใจว่ามีสายที่ใช้งานได้จริง
+ *
+ * `reconnect.wake()` อย่างเดียวไม่พอ มันปลุกได้เฉพาะตอนมี timer รออยู่ ซึ่งพลาดสองกรณีที่
+ * ทำให้จอนิ่งหลังสลับแอป: socket ที่ TCP ตายเงียบยังรายงาน OPEN (ไม่มี onclose จึงไม่มี
+ * timer) และ onclose ที่ยังรอ checkSession อยู่ (ws เป็น null แต่ยังไม่ได้ตั้ง timer)
+ */
+function ensureLiveConnection(): void {
+  if (stopped || !term) return;
+  if (ws?.readyState === WebSocket.OPEN) { liveness.probe(ws); return; }
+  if (ws === null) {
+    // connect() กันซ้อนเองด้วย `connecting` · ยกเลิก timer ที่อาจค้างอยู่เพื่อไม่ให้มันยิง
+    // onWait ทับสถานะหลังต่อติดแล้ว
+    reconnect.cancel();
+    void connect();
+    return;
   }
+  reconnect.wake();   // CONNECTING / CLOSING — ปล่อยให้ทางเดิมจัดการ
 }
 
 /** เด้งกลับหน้า login — ใช้ตอน session หมดอายุระหว่าง reconnect */
@@ -919,7 +940,11 @@ async function connect(): Promise<void> {
 
   socket.onopen = () => {
     reconnect.reset();
-    showStatus(null);
+    // บอกเหตุผลที่จอเพิ่งถูกล้าง — และเป็นหลักฐานบนเครื่องจริงว่าสายตายเงียบระหว่าง
+    // อยู่เบื้องหลังเกิดขึ้นจริง (ถ้าอาการจอนิ่งยังอยู่โดยไม่เคยเห็นข้อความนี้ = สาเหตุอื่น)
+    if (revivedFromDeadSocket) showStatus('สายหลุดระหว่างอยู่เบื้องหลัง — ต่อใหม่แล้ว', TRANSIENT);
+    else showStatus(null);
+    revivedFromDeadSocket = false;
     term!.reset();          // PTY ใหม่คือ process ใหม่ ไม่รู้ว่าจออยู่ในสภาพไหน
     resetInputModifiers();
     // การ reconnect ไม่เปลี่ยน focus mode: คงทั้ง physical/soft/suspended ตามที่ผู้ใช้เลือก
@@ -927,10 +952,15 @@ async function connect(): Promise<void> {
   };
 
   socket.onmessage = ev => {
+    // socket ที่ถูกปลดเพราะ liveness ตัดสินว่าตาย (แต่จริงๆ แค่ช้า) ยังส่ง output ของ PTY
+    // เก่ามาได้จนกว่า server จะเตะมัน — ปล่อยลงจอคือปนกับ PTY ใหม่หลัง term.reset()
+    if (socket !== ws) return;
     if (ev.data instanceof ArrayBuffer) term!.write(new Uint8Array(ev.data));
+    else if (typeof ev.data === 'string') liveness.onText(socket, ev.data);   // control: pong
   };
 
   socket.onclose = ev => {
+    liveness.cancel(socket);
     // handler ของ socket เก่าที่ปิดช้ากว่าตัวใหม่เปิด จะมา null ตัวที่ต่อติดอยู่
     // (เน็ตกระตุกแล้ว reconnect ทับ) อาการคือพิมพ์ไม่ออกทั้งที่จอยังสด
     // เช็คตัวตนก่อนเสมอ แล้วปล่อยผ่านทั้ง handler ไม่ใช่แค่ข้ามบรรทัด ws = null
@@ -972,6 +1002,9 @@ async function connect(): Promise<void> {
       // เน็ตล่ม (unreachable) ต้อง reconnect ต่อ ไม่งั้นขาดสัญญาณแวบเดียว
       // ก็ต้องพิมพ์รหัสใหม่ ซึ่งคือเคสที่เกิดบ่อยที่สุดของแอปนี้
       if (await checkSession() === 'expired') { backToLogin(); return; }
+      // ระหว่างรอคำตอบ ensureLiveConnection() อาจต่อใหม่ไปแล้ว (ผู้ใช้กลับมาที่หน้า) —
+      // ตั้งนัดซ้ำตอนนี้จะขึ้น "กำลังต่อใหม่ใน N วิ…" ค้างทับทั้งที่ต่ออยู่
+      if (ws !== null || stopped) return;
       reconnect.schedule();
     })();
   };
@@ -1023,9 +1056,10 @@ async function startSession(): Promise<void> {
   // ถ้าใครลบ early return นั้นออกในอนาคต การเข้า startSession() รอบสองจะมาลงทะเบียน
   // listener คู่นี้ซ้ำอีกชุด แล้ว visibilitychange/online หนึ่งครั้งจะยิง connect() สองครั้งพร้อมกัน
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') reconnect.wake();
+    if (document.visibilityState === 'visible') ensureLiveConnection();
   });
-  window.addEventListener('online', () => { reconnect.wake(); });
+  window.addEventListener('pageshow', ensureLiveConnection);
+  window.addEventListener('online', ensureLiveConnection);
 
   await connect();
 }
@@ -1127,7 +1161,7 @@ async function tryResume(): Promise<void> {
 retryEl.addEventListener('click', () => { void tryResume(); });
 
 // ลองใหม่เองเมื่อหน้ากลับมาเห็นหรือเน็ตกลับมา — เฉพาะตอนยังติดอยู่ที่หน้า login
-// ถ้าเข้า session ไปแล้ว `reconnect.wake()` ใน startSession เป็นคนดูแลแทน
+// ถ้าเข้า session ไปแล้ว `ensureLiveConnection()` ใน startSession เป็นคนดูแลแทน
 const resumeIfStranded = (): void => { if (!loginPage.hidden) void tryResume(); };
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') resumeIfStranded();

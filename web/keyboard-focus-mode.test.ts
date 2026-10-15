@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyTerminalFocusEffect,
+  createResumeReconciler,
   initialTerminalFocusState,
+  reconcileWithViewport,
   transitionTerminalFocus,
   type TerminalFocusEvent,
   type TerminalFocusState,
@@ -165,5 +167,48 @@ describe('terminal focus mode transitions', () => {
       state: { mode: 'physical' },
       effect: { type: 'focus', inputMode: 'none', cycle: false },
     });
+  });
+});
+
+describe('reconcileWithViewport', () => {
+  it('soft แต่คีย์บอร์ดหายไปแล้ว → native-ime-hidden', () => {
+    expect(reconcileWithViewport('soft', false)).toBe('native-ime-hidden');
+  });
+
+  it.each([
+    ['soft', true],
+    ['physical', false],
+    ['physical', true],
+    ['suspended', false],
+  ] as const)('%s + visible=%s → ไม่ทำอะไร', (mode, visible) => {
+    expect(reconcileWithViewport(mode, visible)).toBeNull();
+  });
+});
+
+describe('createResumeReconciler', () => {
+  it('กลับมาแล้ว viewport นิ่ง → ปรับ soft ที่ค้างให้เป็น physical', () => {
+    const r = createResumeReconciler();
+    r.markResumed();
+    expect(r.onViewportSettled('soft', false)).toBe('native-ime-hidden');
+  });
+
+  it('ใช้ได้ครั้งเดียวต่อการกลับมาหนึ่งครั้ง', () => {
+    const r = createResumeReconciler();
+    r.markResumed();
+    r.onViewportSettled('physical', false);
+    expect(r.onViewportSettled('soft', false)).toBeNull();
+  });
+
+  it('viewport นิ่งโดยไม่ได้กลับมาจากเบื้องหลัง → ไม่ทำอะไร', () => {
+    // การตรวจแบบ level ตอนปกติจะตัดคีย์บอร์ดที่กำลังเลื่อนขึ้นหลังกด ⌨ ทิ้งกลางทาง
+    const r = createResumeReconciler();
+    expect(r.onViewportSettled('soft', false)).toBeNull();
+  });
+
+  it('กด ⌨ หลังกลับมาก่อน viewport นิ่ง → ไม่ไปตัดคีย์บอร์ดที่เพิ่งขอ', () => {
+    const r = createResumeReconciler();
+    r.markResumed();
+    r.onKeyboardRequested();
+    expect(r.onViewportSettled('soft', false)).toBeNull();
   });
 });

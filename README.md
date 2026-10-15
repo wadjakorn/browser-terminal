@@ -329,6 +329,11 @@ reporting ไว้ บน shell เปล่าๆ จะไม่มีอะ�
   cycle; การปิด IME ด้วยปุ่มของระบบกลับไป physical mode โดยไม่ blur; และการเลือกข้อความ
   จะ suspend terminal focus ไม่มี global key capture ดังนั้น form input จริงยังเป็นเจ้าของ
   keyboard event ของตัวเอง
+- **กลับจากเบื้องหลังต้องเทียบ focus mode กับคีย์บอร์ดจริงหนึ่งครั้ง** — OS ซ่อน IME ให้ตอน
+  หน้าอยู่เบื้องหลัง โดยที่ `visualViewport` resize ไม่มาถึงเรา mode จึงค้างที่ `soft` และแตะจอ
+  ครั้งถัดไปคีย์บอร์ดเด้งเอง `createResumeReconciler()` เทียบแบบ level เฉพาะครั้งแรกที่ viewport
+  นิ่งหลังกลับมา (ตอนปกติต้องเป็นแบบ edge เท่านั้น ไม่งั้นตัด IME ที่กำลังเลื่อนขึ้นทิ้ง) และ
+  ยกเลิกถ้าผู้ใช้กด ⌨ ก่อนถึงจังหวะนั้น
 - **การแตะหรือการลากเทอร์มินัลตามปกติจะไม่ blur เพียงเพราะ IME ถูกซ่อน** — touch
   interaction ยังคง terminal focus ใน physical mode; เฉพาะ selection mode เท่านั้นที่
   suspend focus เพื่อรองรับการเลือกข้อความ

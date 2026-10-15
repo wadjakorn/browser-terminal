@@ -8,6 +8,7 @@ import { createGestureRecognizer } from './touch-gestures.js';
 import { isKeyboardVisible } from './keyboard-visibility.js';
 import {
   applyTerminalFocusEffect,
+  createResumeReconciler,
   initialTerminalFocusState,
   transitionTerminalFocus,
   type TerminalFocusEvent,
@@ -225,7 +226,11 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       return !(ownsTextInput && visible);
     },
   };
+  const resumeReconciler = createResumeReconciler();
   const dispatchTerminalFocus = (event: TerminalFocusEvent): void => {
+    if (event === 'request-ime-open' || event === 'request-ime-close') {
+      resumeReconciler.onKeyboardRequested();
+    }
     const transition = transitionTerminalFocus(terminalFocusState, event);
     terminalFocusState = transition.state;
     applyTerminalFocusEffect(terminalFocusPort, transition.effect);
@@ -326,8 +331,25 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   // ผู้ใช้ปิดคีย์บอร์ดด้วยปุ่มของ OS = viewport ขยายกลับ แต่คง terminal focus ไว้
   // ใน physical mode เพื่อให้คีย์บอร์ด Bluetooth พิมพ์ต่อได้โดยไม่เรียก IME กลับมา
   const vv = window.visualViewport;
+  let prevVisible = keyboardVisible();
+
+  markResumed = () => resumeReconciler.markResumed();
+  /*
+   * ตอนหน้าอยู่เบื้องหลัง OS ซ่อนคีย์บอร์ดให้โดยที่ resize ข้างล่างไม่มาถึงเรา focus mode
+   * จึงค้างที่ soft (inputMode="text") แล้วแตะจอครั้งถัดไปคีย์บอร์ดเด้งเอง — เทียบใหม่หนึ่ง
+   * ครั้งหลัง viewport นิ่ง และตั้ง prevVisible ให้ตรง ไม่งั้นค่าเก่าที่ค้างเป็น true จะทำให้
+   * resize ครั้งถัดไปตัดสินผิด · เฉพาะเครื่องสัมผัส: บนเดสก์ท็อป keyboardVisible() อ่านจาก
+   * focus ไม่ใช่ viewport
+   */
+  reconcileAfterResume = () => {
+    if (!vv || !('ontouchstart' in window)) return;
+    const visible = keyboardVisible();
+    const event = resumeReconciler.onViewportSettled(terminalFocusState.mode, visible);
+    if (event) dispatchTerminalFocus(event);
+    prevVisible = visible;
+  };
+
   if (vv) {
-    let prevVisible = keyboardVisible();
     vv.addEventListener('resize', () => {
       const nextVisible = keyboardVisible();
       if (prevVisible && !nextVisible) {
@@ -483,6 +505,11 @@ function leaveSelectionForKeyboard(): void {
 
 /** ให้ปุ่ม ⌨ สว่างตอนคีย์บอร์ดเปิด — ไม่งั้นผู้ใช้ไม่มีทางรู้ว่าสถานะไหน */
 let syncKeyboardButton: () => void = () => {};
+
+/** หน้ากลับมาจากเบื้องหลัง — ตั้งค่าจริงใน initTerminal (ดู createResumeReconciler) */
+let markResumed: () => void = () => {};
+/** เรียกเมื่อ viewport นิ่ง — ปรับ focus mode ให้ตรงคีย์บอร์ดจริงถ้าเพิ่งกลับมา */
+let reconcileAfterResume: () => void = () => {};
 
 /**
  * ส่ง event ที่สังเคราะห์เองเข้า xterm แล้วให้ xterm เข้ารหัสเป็น escape sequence
@@ -1041,6 +1068,7 @@ async function startSession(): Promise<void> {
   watchViewport(() => {
     created.keybar.onViewportSettled(keyboardVisible());
     sendResize();
+    reconcileAfterResume();
     syncKeyboardButton();   // ระบบซ่อน/แสดงคีย์บอร์ดเอง ไม่ยิง focus/blur ให้เรา
   }, frame => {
     // อัปเดตความสูง panel ทุก visualViewport frame เพื่อให้ตาม animation ของ IME
@@ -1055,10 +1083,14 @@ async function startSession(): Promise<void> {
   // สองบรรทัดนี้ผูกอยู่กับ early return `if (term)` ด้านบนสุดของฟังก์ชันนี้ —
   // ถ้าใครลบ early return นั้นออกในอนาคต การเข้า startSession() รอบสองจะมาลงทะเบียน
   // listener คู่นี้ซ้ำอีกชุด แล้ว visibilitychange/online หนึ่งครั้งจะยิง connect() สองครั้งพร้อมกัน
+  // markResumed ก่อนเสมอ — watchViewport ผูกสองอีเวนต์นี้ไว้แล้วและจะเรียก onChange
+  // หลัง debounce 100 ms ซึ่งเป็นจังหวะที่ reconcileAfterResume ทำงาน
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') ensureLiveConnection();
+    if (document.visibilityState !== 'visible') return;
+    markResumed();
+    ensureLiveConnection();
   });
-  window.addEventListener('pageshow', ensureLiveConnection);
+  window.addEventListener('pageshow', () => { markResumed(); ensureLiveConnection(); });
   window.addEventListener('online', ensureLiveConnection);
 
   await connect();

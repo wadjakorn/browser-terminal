@@ -100,3 +100,39 @@ export function transitionTerminalFocus(
     }
   }
 }
+
+/**
+ * focus mode ควรเป็นอะไรเมื่อเทียบกับคีย์บอร์ดที่มองเห็นจริงตอนนี้ — `null` = ตรงกันอยู่แล้ว
+ *
+ * กรณีเดียวที่ต้องแก้คือ `soft` ทั้งที่คีย์บอร์ดหายไปแล้ว: `inputMode` ยังเป็น `text`
+ * การแตะจอครั้งถัดไปทำให้ xterm focus แล้ว IME เด้งขึ้นมาเองทั้งที่ผู้ใช้ไม่ได้กด ⌨
+ */
+export function reconcileWithViewport(
+  mode: TerminalFocusMode,
+  keyboardVisible: boolean,
+): TerminalFocusEvent | null {
+  return mode === 'soft' && !keyboardVisible ? 'native-ime-hidden' : null;
+}
+
+/**
+ * เรียก `reconcileWithViewport` เฉพาะครั้งแรกที่ viewport นิ่งหลังกลับจากเบื้องหลัง
+ *
+ * ทำไมไม่เรียกทุกครั้งที่ viewport นิ่ง: ระหว่างที่ IME กำลังเลื่อนขึ้นหลังกด ⌨ mode เป็น
+ * `soft` แล้วแต่ยังมองไม่เห็น การตรวจแบบ level จะตัดมันทิ้งกลางทาง ตอนปกติจึงใช้แบบ
+ * edge (เห็น → ไม่เห็น) ใน listener ของ visualViewport แทน แต่ตอนหน้าอยู่เบื้องหลัง OS
+ * ซ่อนคีย์บอร์ดโดยที่ edge นั้นไม่มาถึงเรา หลังกลับมาจึงต้องเทียบแบบ level หนึ่งครั้ง
+ *
+ * กด ⌨ ระหว่างรอ = ผู้ใช้ตัดสินแล้ว ยกเลิกการเทียบรอบนี้ ไม่งั้นเจอ race แบบเดียวกัน
+ */
+export function createResumeReconciler() {
+  let resumed = false;
+  return {
+    markResumed(): void { resumed = true; },
+    onKeyboardRequested(): void { resumed = false; },
+    onViewportSettled(mode: TerminalFocusMode, keyboardVisible: boolean): TerminalFocusEvent | null {
+      if (!resumed) return null;
+      resumed = false;
+      return reconcileWithViewport(mode, keyboardVisible);
+    },
+  };
+}

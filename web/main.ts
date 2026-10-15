@@ -540,9 +540,11 @@ function createTerminalPort(t: Terminal, el: HTMLElement, target: HTMLElement): 
       };
     },
 
-    dispatchMouse(type, clientX, clientY) {
+    mouseReporting: () => t.modes.mouseTrackingMode !== 'none',
+
+    dispatchMouse(type, clientX, clientY, forceSelection) {
       target.dispatchEvent(new MouseEvent(type, {
-        ...selectionMouseInit(type, clientX, clientY),
+        ...selectionMouseInit(type, clientX, clientY, forceSelection),
         view: window,
       }));
     },

@@ -346,6 +346,12 @@ reporting ไว้ บน shell เปล่าๆ จะไม่มีอะ�
   `new MouseEvent()` ที่ไม่ระบุ `detail` ได้ 0 ซึ่งไม่เข้าสาขาไหนเลย ผลคือไม่มีการเลือก
   ไม่มีไฮไลต์ และ**ไม่มี error ให้เห็น** ทั้งที่ event ถูกส่งถึงและผ่านด่านอื่นครบแล้ว
   ทุกฟิลด์อยู่ใน `selectionMouseInit()` ที่เดียว อย่ากระจายกลับออกไป
+- **`shiftKey` ของ event สังเคราะห์ต้องใส่เฉพาะตอนที่แอปข้างในเปิด mouse reporting** —
+  มันมีไว้ให้ `shouldForceSelection` ทะลุ mouse reporting แต่ตอนที่ไม่มี (shell เปล่า)
+  selection service ของ xterm เปิดอยู่แล้ว และ `shiftKey` จะพาไป `_handleIncrementalClick`
+  ซึ่ง "ขยาย selection เดิม" ที่ไม่มีอยู่ ผลคือ**ไม่มีไฮไลต์เลยและไม่มี error** ถ้าแอปเปิด
+  mouse reporting *กลางการลาก* xterm จะล้าง selection ทิ้ง แต่ตัวเราสร้างกรอบจากตำแหน่งนิ้ว
+  อยู่ดี — ได้หมุดแต่ไม่มีไฮไลต์ ยอมรับได้เพราะเกิดยาก
 - **xterm โฟกัส textarea ทุกครั้งที่ selection เปลี่ยน บนเครื่องที่ `navigator.platform`
   เป็น Linux — ซึ่งรวม Android** (`"Linux armv8l"`) มันไว้รองรับ primary selection ของ
   X11: `refresh(true)` ยิง `onLinuxMouseSelection` แล้ว `Terminal` ตอบด้วย

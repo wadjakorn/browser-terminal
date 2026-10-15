@@ -352,12 +352,16 @@ reporting ไว้ บน shell เปล่าๆ จะไม่มีอะ�
   ซึ่ง "ขยาย selection เดิม" ที่ไม่มีอยู่ ผลคือ**ไม่มีไฮไลต์เลยและไม่มี error** ถ้าแอปเปิด
   mouse reporting *กลางการลาก* xterm จะล้าง selection ทิ้ง แต่ตัวเราสร้างกรอบจากตำแหน่งนิ้ว
   อยู่ดี — ได้หมุดแต่ไม่มีไฮไลต์ ยอมรับได้เพราะเกิดยาก
-- **xterm โฟกัส textarea ทุกครั้งที่ selection เปลี่ยน บนเครื่องที่ `navigator.platform`
-  เป็น Linux — ซึ่งรวม Android** (`"Linux armv8l"`) มันไว้รองรับ primary selection ของ
-  X11: `refresh(true)` ยิง `onLinuxMouseSelection` แล้ว `Terminal` ตอบด้วย
-  `textarea.focus()` และ `refresh(true)` ถูกเรียกใน `_handleMouseMove` ด้วย แปลว่า
-  โฟกัสกลับมาใหม่**ทุกครั้งที่นิ้วขยับ** — `blur()` ตอนเริ่มลากเอาไม่อยู่ ต้องกันที่ตัว
-  `focus` เอง (ดู listener ใน `initTerminal`)
+- **textarea ของ xterm ต้อง `disabled` ตลอดโหมดเลือก ห้ามรับ focus แม้ชั่วขณะ** —
+  mousedown สังเคราะห์ทำให้ xterm เรียก `focus()` เสมอ (และบน Linux ซึ่งรวม Android
+  `onLinuxMouseSelection` ยังโฟกัสซ้ำทุกครั้งที่นิ้วขยับ) ถ้า focus เกิดได้ xterm จะส่ง
+  focus-in (`ESC[I`) ให้แอปข้างใน และ **herdr ตอบ focus-in ด้วยการตั้ง mouse mode ใหม่
+  ทั้งชุด** → xterm เรียก `selectionService.disable()` ซึ่งล้าง selection ก่อนวาดทันแม้แต่
+  เฟรมเดียว อาการคือลากแล้วไม่มีไฮไลต์เลย (ยาม "blur ทันทีที่ focus" แบบเดิมไม่พอ เพราะ
+  focus เกิดไปแล้ว) lock/unlock อยู่ใน `keyboard-focus-mode.ts` และ unlock ต้องอยู่ก่อน
+  ยาม `canFocus` เสมอ ไม่งั้น textarea จะ disabled ค้างถาวร · ตอน unlock ต้องล้าง
+  `textarea.value` ด้วย — xterm ใส่ข้อความที่เลือกไว้ในนั้น และที่เดียวที่ล้างคือ handler ของ
+  blur ซึ่งไม่เกิดเมื่อไม่เคยได้ focus ค้างไว้แล้ว IME จะพิมพ์/ลบเพี้ยน
 - **โหมดเลือกต้องหยุด momentum ของ recognizer ตอนเข้าโหมด** — มันดักนิ้วไว้ก่อนถึง
   recognizer จึงไม่มีใครเรียก `onTouchStart` ซึ่งเป็นที่เดียวที่หยุด momentum ถ้าไม่หยุด
   การสะบัดเลื่อนก่อนกด `⧉` จะไหลต่อและยิง wheel ใส่แอปข้างในระหว่างที่กำลังลากเลือก

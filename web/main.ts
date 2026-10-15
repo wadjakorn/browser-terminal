@@ -189,6 +189,22 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     textarea: t.textarea,
     focus: () => t.focus(),
     blur: () => t.blur(),
+    /*
+     * disabled แทนยาม "blur ทันทีที่ focus" แบบเดิม — ยามนั้นปล่อยให้ focus เกิดก่อนแล้วค่อย
+     * ดึงออก xterm จึงส่ง focus-in/out ทุกครั้งที่นิ้วขยับ และ herdr ตอบ focus-in ด้วยการ
+     * ตั้ง mouse mode ใหม่ซึ่งล้าง selection ทิ้ง (ดู setLocked ใน keyboard-focus-mode.ts)
+     *
+     * ต้องล้าง value ตอนปลด: onLinuxMouseSelection ของ xterm ใส่ข้อความที่เลือกลง textarea
+     * และที่เดียวที่ล้างคือ handler ของ blur ซึ่งไม่เกิดเมื่อ textarea ไม่เคยได้ focus — ถ้า
+     * ค้างไว้ IME จะเห็นมันเป็นข้อความรอบ cursor แล้วพิมพ์/ลบเพี้ยน (เช็ค disabled ก่อน
+     * เพื่อไม่ไปล้างกลาง composition ของ focus effect ปกติ)
+     */
+    setLocked: (locked: boolean) => {
+      const textarea = t.textarea;
+      if (!textarea) return;
+      if (!locked && textarea.disabled) textarea.value = '';
+      textarea.disabled = locked;
+    },
     canFocus: () => {
       if (selection?.active()) return false;
       const active = document.activeElement;
@@ -294,28 +310,6 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       Boolean(window.visualViewport && 'ontouchstart' in window && open),
     );
   };
-
-  /**
-   * ยามกันคีย์บอร์ดเด้งระหว่างโหมดเลือก
-   *
-   * xterm รองรับ primary selection ของ X11 ด้วยการโฟกัส textarea ทุกครั้งที่
-   * selection เปลี่ยน:
-   *
-   *   refresh(e) { ... isLinux && e && selectionText.length
-   *                 && _onLinuxMouseSelection.fire(selectionText) }
-   *   onLinuxMouseSelection(text => { textarea.value = text; textarea.focus(); ... })
-   *
-   * และ `isLinux` มาจาก navigator.platform ซึ่งบน Android คือ "Linux armv8l" จึงเข้า
-   * เงื่อนไขเต็มๆ ส่วน refresh(true) ถูกเรียกทั้งใน handleMouseDown และ
-   * _handleMouseMove แปลว่ามันโฟกัสกลับมาใหม่ทุกครั้งที่นิ้วขยับ — blur ครั้งเดียว
-   * ตอนเริ่มลากจึงเอาไม่อยู่ ต้องกันที่ตัว focus เอง
-   *
-   * วัดแล้วในเบราว์เซอร์จริง: blur อย่างเดียว focused กลับเป็น true ตั้งแต่ mousemove
-   * แรก ส่วนยามตัวนี้ทำให้ focused เป็น false ตลอดการลากโดย selection ยังอยู่ครบ
-   */
-  t.textarea?.addEventListener('focus', () => {
-    if (selection?.active()) t.blur();
-  });
 
   // sync สถานะปุ่มจากทุกทางที่สถานะเปลี่ยนได้โดยไม่ผ่าน dispatcher ของเรา
   t.textarea?.addEventListener('focus', syncKeyboardButton);
@@ -728,14 +722,10 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     if (selectionOwnsTouch(e)) {
       const touch = firstTouch(e);
       lastSelectionPoint = { x: touch.clientX, y: touch.clientY };
+      // ไม่ต้อง blur: textarea ถูก lock ตั้งแต่เข้าโหมด (selection-entered) focus() ที่
+      // xterm เรียกใน handler ของ mousedown จึงไม่เกิดอะไรขึ้นเลย คีย์บอร์ดจึงไม่เด้งมา
+      // หด viewport กลางการลาก
       selection!.pointerDown(touch.clientX, touch.clientY);
-      // blur เสมอ ไม่ใช่แค่ตอนที่คีย์บอร์ดปิดอยู่ก่อน — ต่างจาก tap และ dragStart
-      // ที่ตั้งใจคงสถานะเดิมของผู้ใช้ไว้
-      //
-      // xterm เรียก focus() ใน handler ของ mousedown เสมอ ถ้าปล่อยให้คีย์บอร์ดที่
-      // เปิดอยู่ค้างต่อ visualViewport จะหดระหว่างลาก layout ขยับ และ screenMetrics()
-      // ที่ใช้แปลง px → คอลัมน์ ก็เปลี่ยนกลางคัน กรอบที่เลือกจึงวิ่งหนีมือ
-      t.blur();
       return;
     }
     if (e.touches.length >= 2) fontAtPinchStart = t.options.fontSize ?? 13;

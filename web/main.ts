@@ -8,6 +8,7 @@ import { createGestureRecognizer } from './touch-gestures.js';
 import { isKeyboardVisible } from './keyboard-visibility.js';
 import {
   applyTerminalFocusEffect,
+  createResumeReconciler,
   initialTerminalFocusState,
   transitionTerminalFocus,
   type TerminalFocusEvent,
@@ -31,6 +32,9 @@ import { createReconnect } from './reconnect.js';
 import { createStrandedRetry } from './stranded-retry.js';
 import { createPointerArm } from './pointer-arm.js';
 import { suppressesContextMenu } from './context-menu.js';
+import { terminalOptions } from './terminal-options.js';
+import { checkSession } from './session-check.js';
+import { createLiveness } from './liveness.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -85,24 +89,43 @@ const reconnect = createReconnect({
   onWait: seconds => { showStatus(`กำลังต่อใหม่ใน ${seconds} วิ…`); },
 });
 
-/**
- * GET /api/session — แยกสามสถานะ ไม่ใช่ boolean
- *
- * 'valid' / 'expired' / 'unreachable' ต้องแยกกัน เพราะเน็ตมือถือสะดุดคือ
- * สถานการณ์อันดับหนึ่งของแอปนี้ ถ้ารวม "เน็ตล่ม" เข้ากับ "session หมดอายุ"
- * ผู้ใช้จะถูกเด้งกลับหน้า login ทุกครั้งที่ขาดสัญญาณ ทั้งที่ cookie ยังใช้ได้
- */
-type SessionState = 'valid' | 'expired' | 'unreachable';
+/** true ระหว่างต่อใหม่เพราะ liveness ตัดสินว่าสายตาย — onopen ใช้บอกผู้ใช้ว่าทำไมจอเพิ่ง reset */
+let revivedFromDeadSocket = false;
 
-async function checkSession(): Promise<SessionState> {
-  try {
-    const res = await fetch('/api/session');
-    if (res.ok) return 'valid';
-    if (res.status === 401) return 'expired';
-    return 'unreachable';   // 5xx = server มีปัญหา ไม่ใช่ session หมดอายุ
-  } catch {
-    return 'unreachable';   // fetch โยน = เน็ตล่ม ต้อง reconnect ต่อ ไม่ใช่เด้ง login
+const liveness = createLiveness<WebSocket>({
+  onDead: socket => {
+    // ต้องเช็คตัวตน: ถ้า onclose จริงมาถึงระหว่างรอแล้ว reconnect ได้ socket ใหม่ไปแล้ว
+    // การตัดสินนี้เป็นของตัวเก่า ห้ามไปฆ่าตัวใหม่ที่ดีอยู่แล้วสร้าง PTY ที่สอง
+    if (socket !== ws || stopped) return;
+    // ปลดก่อนปิด — onclose/onmessage ของมันจะถูกเมินด้วย identity check รวมถึง 4000
+    // ที่ server จะเตะมันทิ้งเมื่อ socket ใหม่ต่อเข้าไป (ไม่งั้นกลายเป็น "เปิดที่อื่นแล้ว")
+    ws = null;
+    try { socket.close(); } catch { /* ปิดไม่ได้ก็ไม่เป็นไร ปลดไปแล้ว */ }
+    revivedFromDeadSocket = true;
+    reconnect.cancel();
+    reconnect.reset();
+    void connect();
+  },
+});
+
+/**
+ * หน้ากลับมาแสดงผล / เน็ตกลับมา — ทำให้แน่ใจว่ามีสายที่ใช้งานได้จริง
+ *
+ * `reconnect.wake()` อย่างเดียวไม่พอ มันปลุกได้เฉพาะตอนมี timer รออยู่ ซึ่งพลาดสองกรณีที่
+ * ทำให้จอนิ่งหลังสลับแอป: socket ที่ TCP ตายเงียบยังรายงาน OPEN (ไม่มี onclose จึงไม่มี
+ * timer) และ onclose ที่ยังรอ checkSession อยู่ (ws เป็น null แต่ยังไม่ได้ตั้ง timer)
+ */
+function ensureLiveConnection(): void {
+  if (stopped || !term) return;
+  if (ws?.readyState === WebSocket.OPEN) { liveness.probe(ws); return; }
+  if (ws === null) {
+    // connect() กันซ้อนเองด้วย `connecting` · ยกเลิก timer ที่อาจค้างอยู่เพื่อไม่ให้มันยิง
+    // onWait ทับสถานะหลังต่อติดแล้ว
+    reconnect.cancel();
+    void connect();
+    return;
   }
+  reconnect.wake();   // CONNECTING / CLOSING — ปล่อยให้ทางเดิมจัดการ
 }
 
 /** เด้งกลับหน้า login — ใช้ตอน session หมดอายุระหว่าง reconnect */
@@ -153,21 +176,7 @@ const pointerArm = createPointerArm();
 let refreshKeybar: () => void = () => {};
 
 function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar } {
-  const t = new Terminal({
-    fontFamily: 'ui-monospace, monospace',
-    fontSize: loadFontSize(),
-    cursorBlink: true,
-    theme: { background: '#101014', foreground: '#d8d8e0' },
-    // บน iPad `navigator.platform` คือ 'MacIntel' ทำให้ xterm คิดว่าเป็น Mac แล้ว
-    // shouldForceSelection กลายเป็น `altKey && ตัวเลือกนี้` — ถ้าปล่อยเป็น false
-    // เงื่อนไขจะเป็นจริงไม่ได้เลย และ mousedown สังเคราะห์ของเราจะทะลุไปถึงแอปข้างใน
-    // กลายเป็นคลิกจริงที่สลับ pane ของ herdr ทุกครั้งที่ผู้ใช้พยายามเลือกข้อความ
-    //
-    // ตั้ง true ได้โดยไม่ต้องเช็ค platform: บนเครื่องที่ไม่ใช่ Mac ไม่มี predicate
-    // ตัวไหนอ่านค่านี้เลย (shouldForceSelection ใช้ shiftKey, shouldColumnSelect
-    // ใช้ `!(isMac && ค่านี้)` ซึ่งเป็นจริงอยู่แล้วเมื่อ isMac เป็น false)
-    macOptionClickForcesSelection: true,
-  });
+  const t = new Terminal(terminalOptions(loadFontSize()));
   const fit = new FitAddon();
   t.loadAddon(fit);
   t.open($('terminal'));
@@ -189,6 +198,22 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     textarea: t.textarea,
     focus: () => t.focus(),
     blur: () => t.blur(),
+    /*
+     * disabled แทนยาม "blur ทันทีที่ focus" แบบเดิม — ยามนั้นปล่อยให้ focus เกิดก่อนแล้วค่อย
+     * ดึงออก xterm จึงส่ง focus-in/out ทุกครั้งที่นิ้วขยับ และ herdr ตอบ focus-in ด้วยการ
+     * ตั้ง mouse mode ใหม่ซึ่งล้าง selection ทิ้ง (ดู setLocked ใน keyboard-focus-mode.ts)
+     *
+     * ต้องล้าง value ตอนปลด: onLinuxMouseSelection ของ xterm ใส่ข้อความที่เลือกลง textarea
+     * และที่เดียวที่ล้างคือ handler ของ blur ซึ่งไม่เกิดเมื่อ textarea ไม่เคยได้ focus — ถ้า
+     * ค้างไว้ IME จะเห็นมันเป็นข้อความรอบ cursor แล้วพิมพ์/ลบเพี้ยน (เช็ค disabled ก่อน
+     * เพื่อไม่ไปล้างกลาง composition ของ focus effect ปกติ)
+     */
+    setLocked: (locked: boolean) => {
+      const textarea = t.textarea;
+      if (!textarea) return;
+      if (!locked && textarea.disabled) textarea.value = '';
+      textarea.disabled = locked;
+    },
     canFocus: () => {
       if (selection?.active()) return false;
       const active = document.activeElement;
@@ -201,7 +226,11 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
       return !(ownsTextInput && visible);
     },
   };
+  const resumeReconciler = createResumeReconciler();
   const dispatchTerminalFocus = (event: TerminalFocusEvent): void => {
+    if (event === 'request-ime-open' || event === 'request-ime-close') {
+      resumeReconciler.onKeyboardRequested();
+    }
     const transition = transitionTerminalFocus(terminalFocusState, event);
     terminalFocusState = transition.state;
     applyTerminalFocusEffect(terminalFocusPort, transition.effect);
@@ -295,28 +324,6 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
     );
   };
 
-  /**
-   * ยามกันคีย์บอร์ดเด้งระหว่างโหมดเลือก
-   *
-   * xterm รองรับ primary selection ของ X11 ด้วยการโฟกัส textarea ทุกครั้งที่
-   * selection เปลี่ยน:
-   *
-   *   refresh(e) { ... isLinux && e && selectionText.length
-   *                 && _onLinuxMouseSelection.fire(selectionText) }
-   *   onLinuxMouseSelection(text => { textarea.value = text; textarea.focus(); ... })
-   *
-   * และ `isLinux` มาจาก navigator.platform ซึ่งบน Android คือ "Linux armv8l" จึงเข้า
-   * เงื่อนไขเต็มๆ ส่วน refresh(true) ถูกเรียกทั้งใน handleMouseDown และ
-   * _handleMouseMove แปลว่ามันโฟกัสกลับมาใหม่ทุกครั้งที่นิ้วขยับ — blur ครั้งเดียว
-   * ตอนเริ่มลากจึงเอาไม่อยู่ ต้องกันที่ตัว focus เอง
-   *
-   * วัดแล้วในเบราว์เซอร์จริง: blur อย่างเดียว focused กลับเป็น true ตั้งแต่ mousemove
-   * แรก ส่วนยามตัวนี้ทำให้ focused เป็น false ตลอดการลากโดย selection ยังอยู่ครบ
-   */
-  t.textarea?.addEventListener('focus', () => {
-    if (selection?.active()) t.blur();
-  });
-
   // sync สถานะปุ่มจากทุกทางที่สถานะเปลี่ยนได้โดยไม่ผ่าน dispatcher ของเรา
   t.textarea?.addEventListener('focus', syncKeyboardButton);
   t.textarea?.addEventListener('blur', syncKeyboardButton);
@@ -324,8 +331,25 @@ function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar 
   // ผู้ใช้ปิดคีย์บอร์ดด้วยปุ่มของ OS = viewport ขยายกลับ แต่คง terminal focus ไว้
   // ใน physical mode เพื่อให้คีย์บอร์ด Bluetooth พิมพ์ต่อได้โดยไม่เรียก IME กลับมา
   const vv = window.visualViewport;
+  let prevVisible = keyboardVisible();
+
+  markResumed = () => resumeReconciler.markResumed();
+  /*
+   * ตอนหน้าอยู่เบื้องหลัง OS ซ่อนคีย์บอร์ดให้โดยที่ resize ข้างล่างไม่มาถึงเรา focus mode
+   * จึงค้างที่ soft (inputMode="text") แล้วแตะจอครั้งถัดไปคีย์บอร์ดเด้งเอง — เทียบใหม่หนึ่ง
+   * ครั้งหลัง viewport นิ่ง และตั้ง prevVisible ให้ตรง ไม่งั้นค่าเก่าที่ค้างเป็น true จะทำให้
+   * resize ครั้งถัดไปตัดสินผิด · เฉพาะเครื่องสัมผัส: บนเดสก์ท็อป keyboardVisible() อ่านจาก
+   * focus ไม่ใช่ viewport
+   */
+  reconcileAfterResume = () => {
+    if (!vv || !('ontouchstart' in window)) return;
+    const visible = keyboardVisible();
+    const event = resumeReconciler.onViewportSettled(terminalFocusState.mode, visible);
+    if (event) dispatchTerminalFocus(event);
+    prevVisible = visible;
+  };
+
   if (vv) {
-    let prevVisible = keyboardVisible();
     vv.addEventListener('resize', () => {
       const nextVisible = keyboardVisible();
       if (prevVisible && !nextVisible) {
@@ -482,6 +506,11 @@ function leaveSelectionForKeyboard(): void {
 /** ให้ปุ่ม ⌨ สว่างตอนคีย์บอร์ดเปิด — ไม่งั้นผู้ใช้ไม่มีทางรู้ว่าสถานะไหน */
 let syncKeyboardButton: () => void = () => {};
 
+/** หน้ากลับมาจากเบื้องหลัง — ตั้งค่าจริงใน initTerminal (ดู createResumeReconciler) */
+let markResumed: () => void = () => {};
+/** เรียกเมื่อ viewport นิ่ง — ปรับ focus mode ให้ตรงคีย์บอร์ดจริงถ้าเพิ่งกลับมา */
+let reconcileAfterResume: () => void = () => {};
+
 /**
  * ส่ง event ที่สังเคราะห์เองเข้า xterm แล้วให้ xterm เข้ารหัสเป็น escape sequence
  * ตามโหมดที่แอปข้างในขอไว้เอง — เราจึงไม่ต้องเขียน mouse protocol เองเลย
@@ -540,9 +569,11 @@ function createTerminalPort(t: Terminal, el: HTMLElement, target: HTMLElement): 
       };
     },
 
-    dispatchMouse(type, clientX, clientY) {
+    mouseReporting: () => t.modes.mouseTrackingMode !== 'none',
+
+    dispatchMouse(type, clientX, clientY, forceSelection) {
       target.dispatchEvent(new MouseEvent(type, {
-        ...selectionMouseInit(type, clientX, clientY),
+        ...selectionMouseInit(type, clientX, clientY, forceSelection),
         view: window,
       }));
     },
@@ -600,8 +631,8 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
 
         case 'tap': {
           // arm ของปุ่ม RMB มาก่อนทุกอย่าง รวมถึงลิงก์ — คลิกขวาบนลิงก์ต้องถึง TUI
-          // ไม่ใช่เปิดแท็บใหม่ (ยามอีกชั้นอยู่ใน links.ts เพราะ mousedown สังเคราะห์
-          // ยังวิ่งผ่าน listener เฟส capture ของเมาส์จริงด้วย)
+          // ไม่ใช่เปิดแท็บใหม่ (listener เฟส capture ของเมาส์จริงปล่อย mousedown
+          // สังเคราะห์ผ่านเสมอ ดู isTrusted ใน links.ts)
           if (pointerArm.consume()) {
             refreshKeybar();
             target.dispatchEvent(new MouseEvent('mousedown', mouseInit(g.x, g.y, { button: 2, buttons: 2 })));
@@ -706,8 +737,10 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
   // เมาส์จริง: xterm ส่ง mouse report ให้ herdr ใน handler ของ mousedown ของมันเอง
   // ดักในเฟส capture เพื่อกลืนอีเวนต์ก่อนถึง xterm เมื่อมีลิงก์อยู่ใต้เคอร์เซอร์
   // ให้พฤติกรรมตรงกับการแตะ: คลิกลิงก์ = เปิดลิงก์อย่างเดียว ไม่สลับ pane
+  // mousedown สังเคราะห์ทุกตัว (โหมดเลือก, หมุด, dragStart) วิ่งผ่านตรงนี้ด้วย จึงต้อง
+  // ส่ง isTrusted ไปกรอง — ไม่งั้นเริ่มลากเลือกบน URL = เปิดแท็บใหม่และไม่มีไฮไลต์
   target.addEventListener('mousedown', e => {
-    if (!linkOpener?.handleMouseDown(cellAt(e.clientX, e.clientY), e.button)) return;
+    if (!linkOpener?.handleMouseDown(cellAt(e.clientX, e.clientY), e.button, e.isTrusted)) return;
     e.preventDefault();
     e.stopPropagation();
   }, { capture: true });
@@ -726,14 +759,10 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
     if (selectionOwnsTouch(e)) {
       const touch = firstTouch(e);
       lastSelectionPoint = { x: touch.clientX, y: touch.clientY };
+      // ไม่ต้อง blur: textarea ถูก lock ตั้งแต่เข้าโหมด (selection-entered) focus() ที่
+      // xterm เรียกใน handler ของ mousedown จึงไม่เกิดอะไรขึ้นเลย คีย์บอร์ดจึงไม่เด้งมา
+      // หด viewport กลางการลาก
       selection!.pointerDown(touch.clientX, touch.clientY);
-      // blur เสมอ ไม่ใช่แค่ตอนที่คีย์บอร์ดปิดอยู่ก่อน — ต่างจาก tap และ dragStart
-      // ที่ตั้งใจคงสถานะเดิมของผู้ใช้ไว้
-      //
-      // xterm เรียก focus() ใน handler ของ mousedown เสมอ ถ้าปล่อยให้คีย์บอร์ดที่
-      // เปิดอยู่ค้างต่อ visualViewport จะหดระหว่างลาก layout ขยับ และ screenMetrics()
-      // ที่ใช้แปลง px → คอลัมน์ ก็เปลี่ยนกลางคัน กรอบที่เลือกจึงวิ่งหนีมือ
-      t.blur();
       return;
     }
     if (e.touches.length >= 2) fontAtPinchStart = t.options.fontSize ?? 13;
@@ -938,7 +967,11 @@ async function connect(): Promise<void> {
 
   socket.onopen = () => {
     reconnect.reset();
-    showStatus(null);
+    // บอกเหตุผลที่จอเพิ่งถูกล้าง — และเป็นหลักฐานบนเครื่องจริงว่าสายตายเงียบระหว่าง
+    // อยู่เบื้องหลังเกิดขึ้นจริง (ถ้าอาการจอนิ่งยังอยู่โดยไม่เคยเห็นข้อความนี้ = สาเหตุอื่น)
+    if (revivedFromDeadSocket) showStatus('สายหลุดระหว่างอยู่เบื้องหลัง — ต่อใหม่แล้ว', TRANSIENT);
+    else showStatus(null);
+    revivedFromDeadSocket = false;
     term!.reset();          // PTY ใหม่คือ process ใหม่ ไม่รู้ว่าจออยู่ในสภาพไหน
     resetInputModifiers();
     // การ reconnect ไม่เปลี่ยน focus mode: คงทั้ง physical/soft/suspended ตามที่ผู้ใช้เลือก
@@ -946,10 +979,15 @@ async function connect(): Promise<void> {
   };
 
   socket.onmessage = ev => {
+    // socket ที่ถูกปลดเพราะ liveness ตัดสินว่าตาย (แต่จริงๆ แค่ช้า) ยังส่ง output ของ PTY
+    // เก่ามาได้จนกว่า server จะเตะมัน — ปล่อยลงจอคือปนกับ PTY ใหม่หลัง term.reset()
+    if (socket !== ws) return;
     if (ev.data instanceof ArrayBuffer) term!.write(new Uint8Array(ev.data));
+    else if (typeof ev.data === 'string') liveness.onText(socket, ev.data);   // control: pong
   };
 
   socket.onclose = ev => {
+    liveness.cancel(socket);
     // handler ของ socket เก่าที่ปิดช้ากว่าตัวใหม่เปิด จะมา null ตัวที่ต่อติดอยู่
     // (เน็ตกระตุกแล้ว reconnect ทับ) อาการคือพิมพ์ไม่ออกทั้งที่จอยังสด
     // เช็คตัวตนก่อนเสมอ แล้วปล่อยผ่านทั้ง handler ไม่ใช่แค่ข้ามบรรทัด ws = null
@@ -991,6 +1029,9 @@ async function connect(): Promise<void> {
       // เน็ตล่ม (unreachable) ต้อง reconnect ต่อ ไม่งั้นขาดสัญญาณแวบเดียว
       // ก็ต้องพิมพ์รหัสใหม่ ซึ่งคือเคสที่เกิดบ่อยที่สุดของแอปนี้
       if (await checkSession() === 'expired') { backToLogin(); return; }
+      // ระหว่างรอคำตอบ ensureLiveConnection() อาจต่อใหม่ไปแล้ว (ผู้ใช้กลับมาที่หน้า) —
+      // ตั้งนัดซ้ำตอนนี้จะขึ้น "กำลังต่อใหม่ใน N วิ…" ค้างทับทั้งที่ต่ออยู่
+      if (ws !== null || stopped) return;
       reconnect.schedule();
     })();
   };
@@ -1027,6 +1068,7 @@ async function startSession(): Promise<void> {
   watchViewport(() => {
     created.keybar.onViewportSettled(keyboardVisible());
     sendResize();
+    reconcileAfterResume();
     syncKeyboardButton();   // ระบบซ่อน/แสดงคีย์บอร์ดเอง ไม่ยิง focus/blur ให้เรา
   }, frame => {
     // อัปเดตความสูง panel ทุก visualViewport frame เพื่อให้ตาม animation ของ IME
@@ -1041,10 +1083,15 @@ async function startSession(): Promise<void> {
   // สองบรรทัดนี้ผูกอยู่กับ early return `if (term)` ด้านบนสุดของฟังก์ชันนี้ —
   // ถ้าใครลบ early return นั้นออกในอนาคต การเข้า startSession() รอบสองจะมาลงทะเบียน
   // listener คู่นี้ซ้ำอีกชุด แล้ว visibilitychange/online หนึ่งครั้งจะยิง connect() สองครั้งพร้อมกัน
+  // markResumed ก่อนเสมอ — watchViewport ผูกสองอีเวนต์นี้ไว้แล้วและจะเรียก onChange
+  // หลัง debounce 100 ms ซึ่งเป็นจังหวะที่ reconcileAfterResume ทำงาน
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') reconnect.wake();
+    if (document.visibilityState !== 'visible') return;
+    markResumed();
+    ensureLiveConnection();
   });
-  window.addEventListener('online', () => { reconnect.wake(); });
+  window.addEventListener('pageshow', () => { markResumed(); ensureLiveConnection(); });
+  window.addEventListener('online', ensureLiveConnection);
 
   await connect();
 }
@@ -1146,7 +1193,7 @@ async function tryResume(): Promise<void> {
 retryEl.addEventListener('click', () => { void tryResume(); });
 
 // ลองใหม่เองเมื่อหน้ากลับมาเห็นหรือเน็ตกลับมา — เฉพาะตอนยังติดอยู่ที่หน้า login
-// ถ้าเข้า session ไปแล้ว `reconnect.wake()` ใน startSession เป็นคนดูแลแทน
+// ถ้าเข้า session ไปแล้ว `ensureLiveConnection()` ใน startSession เป็นคนดูแลแทน
 const resumeIfStranded = (): void => { if (!loginPage.hidden) void tryResume(); };
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') resumeIfStranded();

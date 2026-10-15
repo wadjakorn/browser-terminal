@@ -26,12 +26,13 @@ interface FakeOpts {
   cellWidth?: number;
   prefs?: SelectionPrefs;
   onBlockChange?: (block: unknown) => void;
+  mouseReporting?: () => boolean;
 }
 
 function fakeTerminal(opts: FakeOpts = {}) {
   const screen = opts.screen ?? SCREEN;
   const columns = Math.max(...screen.map(row => row.length));
-  const dispatched: { type: string; x: number; y: number }[] = [];
+  const dispatched: { type: string; x: number; y: number; force: boolean }[] = [];
   const clearSelection = vi.fn();
   const viewportTop = opts.viewportTop ?? (() => 100);
 
@@ -42,7 +43,8 @@ function fakeTerminal(opts: FakeOpts = {}) {
     readCell: (line, column) => screen[line - viewportTop()]?.[column] ?? '',
     readLine: (line, start, end) => (screen[line - viewportTop()] ?? '').slice(start, end + 1),
     screenMetrics: () => ({ cellWidth: opts.cellWidth ?? CELL_W, cellHeight: CELL_H, left: LEFT, top: TOP }),
-    dispatchMouse: (type, x, y) => dispatched.push({ type, x, y }),
+    mouseReporting: opts.mouseReporting ?? (() => true),
+    dispatchMouse: (type, x, y, force) => dispatched.push({ type, x, y, force }),
     clearSelection,
   };
 
@@ -381,25 +383,60 @@ describe('ธงบน mouse event สังเคราะห์', () => {
     // SelectionService.handleMouseDown แยกทางด้วย `1===e.detail ? _handleSingleClick : ...`
     // new MouseEvent() ที่ไม่ระบุ detail ได้ 0 ซึ่งไม่เข้าสาขาไหน ผลคือไม่มีไฮไลต์และ
     // ไม่มี error ให้เห็น ยืนยันด้วยการวัดจริงในเบราว์เซอร์แล้ว
-    expect(selectionMouseInit('mousedown', 10, 20).detail).toBe(1);
+    expect(selectionMouseInit('mousedown', 10, 20, true).detail).toBe(1);
   });
 
-  it('shiftKey + altKey ต้องมีครบทั้งคู่ทุก event', () => {
-    for (const type of ['mousedown', 'mousemove', 'mouseup'] as const) {
-      const init = selectionMouseInit(type, 1, 2);
-      expect(init.shiftKey).toBe(true);   // shouldForceSelection บนเครื่องที่ไม่ใช่ Mac
-      expect(init.altKey).toBe(true);     // shouldColumnSelect + shouldForceSelection บน iPad
-      expect(init.button).toBe(0);        // handleMouseDown ตรวจ 0===e.button
+  it('altKey และ button 0 มีทุก event ไม่ว่าจะบังคับเลือกหรือไม่', () => {
+    for (const force of [true, false]) {
+      for (const type of ['mousedown', 'mousemove', 'mouseup'] as const) {
+        const init = selectionMouseInit(type, 1, 2, force);
+        expect(init.altKey).toBe(true);     // shouldColumnSelect + shouldForceSelection บน iPad
+        expect(init.button).toBe(0);        // handleMouseDown ตรวจ 0===e.button
+      }
     }
   });
 
+  it('shiftKey ตาม forceSelection — ใส่ตอนไม่มี mouse reporting แล้ว xterm ไม่เลือกอะไรเลย', () => {
+    // `_enabled && e.shiftKey ? _handleIncrementalClick(e) : ...` — ตอนไม่มี mouse
+    // reporting selection service เปิดอยู่ shiftKey จึงพาไปขยาย selection เดิม
+    // (ซึ่งไม่มี) แทนการเริ่มใหม่ ยืนยันในเบราว์เซอร์แล้ว: shell เปล่าไม่มีไฮไลต์เลย
+    expect(selectionMouseInit('mousedown', 1, 2, true).shiftKey).toBe(true);
+    expect(selectionMouseInit('mousedown', 1, 2, false).shiftKey).toBe(false);
+  });
+
   it('buttons เป็น 1 ตอนกดค้าง และ 0 ตอนปล่อย', () => {
-    expect(selectionMouseInit('mousedown', 1, 2).buttons).toBe(1);
-    expect(selectionMouseInit('mousemove', 1, 2).buttons).toBe(1);
-    expect(selectionMouseInit('mouseup', 1, 2).buttons).toBe(0);
+    expect(selectionMouseInit('mousedown', 1, 2, true).buttons).toBe(1);
+    expect(selectionMouseInit('mousemove', 1, 2, true).buttons).toBe(1);
+    expect(selectionMouseInit('mouseup', 1, 2, true).buttons).toBe(0);
   });
 
   it('ส่งพิกัดต่อไปตรงตัว', () => {
-    expect(selectionMouseInit('mousemove', 37.5, 91.5)).toMatchObject({ clientX: 37.5, clientY: 91.5 });
+    expect(selectionMouseInit('mousemove', 37.5, 91.5, true)).toMatchObject({ clientX: 37.5, clientY: 91.5 });
+  });
+});
+
+describe('บังคับเลือกตาม mouse reporting ของแอปข้างใน', () => {
+  it('อ่านสดทุก event — แอปเปิด/ปิด mouse reporting ระหว่างการใช้ได้เสมอ', () => {
+    let reporting = false;
+    const { selection, dispatched } = build({ mouseReporting: () => reporting });
+    selection.toggle();
+
+    selection.pointerDown(...at(12, 1));
+    expect(dispatched.at(-1)).toMatchObject({ type: 'mousedown', force: false });
+
+    reporting = true;
+    selection.pointerMove(...at(14, 2));
+    expect(dispatched.at(-1)).toMatchObject({ type: 'mousemove', force: true });
+  });
+
+  it('จับหมุดก็ใช้กติกาเดียวกัน', () => {
+    const { selection, dispatched } = build({ mouseReporting: () => false });
+    selection.toggle();
+    selection.pointerDown(...at(12, 1));
+    selection.pointerUp(...at(14, 2));
+    dispatched.length = 0;
+
+    selection.beginHandleDrag('end');
+    expect(dispatched.map(d => d.force)).toEqual([false, false]);
   });
 });

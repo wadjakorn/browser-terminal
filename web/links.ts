@@ -300,8 +300,11 @@ export interface LinkOpener {
    *
    * `button` ตามกติกาของ `MouseEvent.button` — เฉพาะปุ่มซ้าย (0) เท่านั้นที่เปิดลิงก์
    * ปุ่มขวาต้องผ่านไปถึง TUI ให้ mouse reporting เข้ารหัสส่งต่อ ไม่ใช่เปิดแท็บใหม่
+   *
+   * `isTrusted` = `MouseEvent.isTrusted` — event สังเคราะห์ (โหมดเลือก, หมุด, dragStart,
+   * ปุ่ม RMB) วิ่งผ่าน listener เดียวกันแต่ไม่ใช่การคลิกลิงก์ ต้องปล่อยให้ถึง xterm เสมอ
    */
-  handleMouseDown(cell: Cell | null, button: number): boolean;
+  handleMouseDown(cell: Cell | null, button: number, isTrusted: boolean): boolean;
 }
 
 export function createLinkOpener({ open, terminal }: LinkOpenerDeps): LinkOpener {
@@ -319,8 +322,8 @@ export function createLinkOpener({ open, terminal }: LinkOpenerDeps): LinkOpener
       return true;
     },
 
-    handleMouseDown(cell, button) {
-      if (button !== 0) return false;
+    handleMouseDown(cell, button, isTrusted) {
+      if (!isTrusted || button !== 0) return false;
       const url = urlAt(cell);
       if (url === null) return false;
       open(url);

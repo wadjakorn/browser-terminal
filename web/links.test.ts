@@ -228,13 +228,13 @@ describe('createLinkOpener', () => {
 
   it('คลิกเมาส์จริงบนลิงก์ = เปิดลิงก์และกลืนอีเวนต์', () => {
     const { open, opener } = setup(['see https://a.io/x ok']);
-    expect(opener.handleMouseDown(AT_URL, 0)).toBe(true);
+    expect(opener.handleMouseDown(AT_URL, 0, true)).toBe(true);
     expect(open).toHaveBeenCalledWith('https://a.io/x');
   });
 
   it('คลิกเมาส์จริงตรงข้อความธรรมดา = ปล่อยผ่านให้ xterm', () => {
     const { open, opener } = setup(['see https://a.io/x ok']);
-    expect(opener.handleMouseDown(AT_TEXT, 0)).toBe(false);
+    expect(opener.handleMouseDown(AT_TEXT, 0, true)).toBe(false);
     expect(open).not.toHaveBeenCalled();
   });
 
@@ -243,7 +243,16 @@ describe('createLinkOpener', () => {
     // listener เฟส capture ตัวนี้ด้วย ถ้าไม่กรอง button ที่นี่ คลิกขวาบนลิงก์จะกลาย
     // เป็นการเปิดแท็บใหม่ และ arm ก็ถูกใช้ทิ้งไปโดยที่ TUI ไม่ได้รับอะไรเลย
     const { open, opener } = setup(['see https://a.io/x ok']);
-    expect(opener.handleMouseDown(AT_URL, 2)).toBe(false);
+    expect(opener.handleMouseDown(AT_URL, 2, true)).toBe(false);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('mousedown สังเคราะห์บนลิงก์ = ไม่เปิดลิงก์ ปล่อยให้ถึง xterm', () => {
+    // โหมดเลือก, การจับหมุด และ dragStart ล้วนยิง mousedown ปุ่มซ้ายที่ target เดียวกับ
+    // เมาส์จริง ถ้าไม่กรอง การเริ่มลากเลือกบน URL จะกลายเป็นเปิดแท็บใหม่และไม่มีไฮไลต์
+    // (ยืนยันในเบราว์เซอร์แล้ว) — การแตะลิงก์มีทางของมันเองที่ handleTap
+    const { open, opener } = setup(['see https://a.io/x ok']);
+    expect(opener.handleMouseDown(AT_URL, 0, false)).toBe(false);
     expect(open).not.toHaveBeenCalled();
   });
 });

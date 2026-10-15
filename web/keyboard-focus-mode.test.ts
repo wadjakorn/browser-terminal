@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyTerminalFocusEffect,
+  createResumeReconciler,
   initialTerminalFocusState,
+  reconcileWithViewport,
   transitionTerminalFocus,
   type TerminalFocusEvent,
   type TerminalFocusState,
@@ -21,6 +23,7 @@ describe('applyTerminalFocusEffect', () => {
         textarea,
         blur: () => calls.push('blur'),
         focus: () => calls.push('focus'),
+        setLocked: (locked: boolean) => calls.push(locked ? 'lock' : 'unlock'),
         canFocus: () => true,
       },
     };
@@ -31,7 +34,7 @@ describe('applyTerminalFocusEffect', () => {
     applyTerminalFocusEffect(port, {
       type: 'focus', inputMode: 'none', cycle: false,
     });
-    expect(calls).toEqual(['mode:none', 'focus']);
+    expect(calls).toEqual(['unlock', 'mode:none', 'focus']);
   });
 
   it('sets text mode before the explicit open focus cycle', () => {
@@ -39,7 +42,7 @@ describe('applyTerminalFocusEffect', () => {
     applyTerminalFocusEffect(port, {
       type: 'focus', inputMode: 'text', cycle: true,
     });
-    expect(calls).toEqual(['mode:text', 'blur', 'focus']);
+    expect(calls).toEqual(['unlock', 'mode:text', 'blur', 'focus']);
   });
 
   it('sets none mode before the explicit close focus cycle', () => {
@@ -47,13 +50,38 @@ describe('applyTerminalFocusEffect', () => {
     applyTerminalFocusEffect(port, {
       type: 'focus', inputMode: 'none', cycle: true,
     });
-    expect(calls).toEqual(['mode:none', 'blur', 'focus']);
+    expect(calls).toEqual(['unlock', 'mode:none', 'blur', 'focus']);
   });
 
   it('blurs for a blur effect', () => {
     const { calls, port } = buildPort();
-    applyTerminalFocusEffect(port, { type: 'blur' });
+    applyTerminalFocusEffect(port, { type: 'blur', lock: false });
     expect(calls).toEqual(['blur']);
+  });
+
+  it('blurs before locking — the focus-out must still reach the app inside', () => {
+    // lock ก่อน blur = textarea ที่ disabled ขณะโฟกัสอยู่ ซึ่งเบราว์เซอร์แต่ละตัวจัดการ
+    // ไม่เหมือนกัน และ xterm อาจไม่ได้ blur event ที่ล้าง textarea.value ให้
+    const { calls, port } = buildPort();
+    applyTerminalFocusEffect(port, { type: 'blur', lock: true });
+    expect(calls).toEqual(['blur', 'lock']);
+  });
+
+  it('unlocks even when a real input owns focus — otherwise the terminal is dead until reload', () => {
+    const { calls, port } = buildPort();
+    port.canFocus = () => false;
+    applyTerminalFocusEffect(port, {
+      type: 'focus', inputMode: 'none', cycle: false,
+    });
+    expect(calls).toEqual(['unlock']);
+  });
+
+  it('unlocks even before xterm has a helper textarea', () => {
+    const { calls, port } = buildPort(false);
+    applyTerminalFocusEffect(port, {
+      type: 'focus', inputMode: 'none', cycle: false,
+    });
+    expect(calls).toEqual(['unlock']);
   });
 
   it('does not focus when xterm has no helper textarea yet', () => {
@@ -61,7 +89,7 @@ describe('applyTerminalFocusEffect', () => {
     applyTerminalFocusEffect(port, {
       type: 'focus', inputMode: 'none', cycle: false,
     });
-    expect(calls).toEqual([]);
+    expect(calls).not.toContain('focus');
   });
 
   it('does not steal focus when a visible real input owns it', () => {
@@ -70,7 +98,7 @@ describe('applyTerminalFocusEffect', () => {
     applyTerminalFocusEffect(port, {
       type: 'focus', inputMode: 'none', cycle: false,
     });
-    expect(calls).toEqual([]);
+    expect(calls).not.toContain('focus');
   });
 });
 
@@ -90,7 +118,7 @@ describe('terminal focus mode transitions', () => {
     { from: 'soft', event: 'native-ime-hidden', to: 'physical',
       effect: { type: 'focus', inputMode: 'none', cycle: false } },
     { from: 'physical', event: 'selection-entered', to: 'suspended',
-      effect: { type: 'blur' } },
+      effect: { type: 'blur', lock: true } },
     { from: 'suspended', event: 'selection-exited', to: 'physical',
       effect: { type: 'focus', inputMode: 'none', cycle: false } },
   ])('$from + $event -> $to', ({ from, event, to, effect }) => {
@@ -139,5 +167,48 @@ describe('terminal focus mode transitions', () => {
       state: { mode: 'physical' },
       effect: { type: 'focus', inputMode: 'none', cycle: false },
     });
+  });
+});
+
+describe('reconcileWithViewport', () => {
+  it('soft แต่คีย์บอร์ดหายไปแล้ว → native-ime-hidden', () => {
+    expect(reconcileWithViewport('soft', false)).toBe('native-ime-hidden');
+  });
+
+  it.each([
+    ['soft', true],
+    ['physical', false],
+    ['physical', true],
+    ['suspended', false],
+  ] as const)('%s + visible=%s → ไม่ทำอะไร', (mode, visible) => {
+    expect(reconcileWithViewport(mode, visible)).toBeNull();
+  });
+});
+
+describe('createResumeReconciler', () => {
+  it('กลับมาแล้ว viewport นิ่ง → ปรับ soft ที่ค้างให้เป็น physical', () => {
+    const r = createResumeReconciler();
+    r.markResumed();
+    expect(r.onViewportSettled('soft', false)).toBe('native-ime-hidden');
+  });
+
+  it('ใช้ได้ครั้งเดียวต่อการกลับมาหนึ่งครั้ง', () => {
+    const r = createResumeReconciler();
+    r.markResumed();
+    r.onViewportSettled('physical', false);
+    expect(r.onViewportSettled('soft', false)).toBeNull();
+  });
+
+  it('viewport นิ่งโดยไม่ได้กลับมาจากเบื้องหลัง → ไม่ทำอะไร', () => {
+    // การตรวจแบบ level ตอนปกติจะตัดคีย์บอร์ดที่กำลังเลื่อนขึ้นหลังกด ⌨ ทิ้งกลางทาง
+    const r = createResumeReconciler();
+    expect(r.onViewportSettled('soft', false)).toBeNull();
+  });
+
+  it('กด ⌨ หลังกลับมาก่อน viewport นิ่ง → ไม่ไปตัดคีย์บอร์ดที่เพิ่งขอ', () => {
+    const r = createResumeReconciler();
+    r.markResumed();
+    r.onKeyboardRequested();
+    expect(r.onViewportSettled('soft', false)).toBeNull();
   });
 });

@@ -5,6 +5,22 @@
 
 ## ฟีเจอร์
 
+### โหมดเลือก: วาดไฮไลต์เองแทนการขับ selection ของ xterm
+
+ตอนนี้ไฮไลต์มาจากการยิง mouse event สังเคราะห์เข้า xterm แล้วให้มันวาดให้ ทางนี้ทำให้
+เกิดบั๊กเงียบไปแล้วสี่ตัวในรอบเดียว (ดู `docs/plan-selection-and-resume.md` ข้อ A1-A4):
+`shiftKey` พาไป incremental click, focus-in ทำให้ herdr รีเซ็ต mouse mode แล้ว xterm ล้าง
+selection, listener ของลิงก์กลืน mousedown, `altKey` กลายเป็น Alt+คลิกย้าย cursor ทุกตัว
+มาจาก xterm ตีความ event ของเราแบบที่ไม่ได้ตั้งใจ
+
+ถ้าวาดกรอบเองจาก `blockRect()` (มีอยู่แล้วสำหรับหมุด) และไม่ยิงอะไรเข้า xterm เลยในโหมด
+เลือก บั๊กกลุ่มนี้หายไปเองโดยโครงสร้าง และลบ `selectionMouseInit`, lock ของ textarea,
+การพึ่ง `macOptionClickForcesSelection`/`altClickMovesCursor` ทิ้งได้ ต้องเพิ่ม "กรอบ
+ชั่วคราวระหว่างลาก" (ตอนนี้ `block` ถูกตั้งตอน `finish()` เท่านั้น)
+
+**เมื่อไหร่ควรทำ:** ถ้าเจอบั๊กตัวที่ห้าในสายเดียวกัน ให้เปลี่ยนมาทางนี้แทนการปะต่อ
+
+
 ### เชื่อตัวตนจาก Tailscale แล้วข้ามหน้า login
 
 `tailscale serve` ส่ง header `tailscale-user-login` / `tailscale-user-name` ที่ยืนยัน

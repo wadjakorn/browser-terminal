@@ -39,8 +39,11 @@ import type { SelectionPrefs } from './selection-prefs.js';
  *   (`1===e.detail ? _handleSingleClick : 2===e.detail ? _handleDoubleClick : ...`)
  *   `new MouseEvent()` ที่ไม่ระบุ detail จะได้ 0 ซึ่งไม่เข้าสาขาไหนเลย ผลคือไม่มี
  *   การเลือกเกิดขึ้นและไม่มีไฮไลต์ ทั้งที่ event ถูกส่งถึงและผ่านด่านอื่นครบแล้ว
- * - `shiftKey` — ทำให้ shouldForceSelection เป็นจริงบนเครื่องที่ไม่ใช่ Mac ซึ่งเป็น
- *   ทางเดียวที่จะเลือกได้ขณะ mouse reporting เปิดอยู่
+ * - `shiftKey` — **เฉพาะตอนที่ mouse reporting เปิดอยู่** (`forceSelection`) ทำให้
+ *   shouldForceSelection เป็นจริงบนเครื่องที่ไม่ใช่ Mac ซึ่งเป็นทางเดียวที่จะเลือกได้
+ *   ขณะนั้น แต่ตอน mouse reporting ปิด selection service เปิดอยู่แล้ว และ
+ *   `_enabled && e.shiftKey ? _handleIncrementalClick(e) : ...` จะพาไป "ขยาย
+ *   selection เดิม" ซึ่งไม่มี — ใส่ไว้เสมอเท่ากับ shell เปล่าไม่มีไฮไลต์เลย
  * - `altKey` — ทำให้ shouldColumnSelect เป็นจริง (โหมดเลือกแบบคอลัมน์) และทำให้
  *   shouldForceSelection เป็นจริงบน iPad
  * - `button: 0` — handleMouseDown ตรวจ `0===e.button` ตรงๆ
@@ -50,12 +53,13 @@ export function selectionMouseInit(
   type: 'mousedown' | 'mousemove' | 'mouseup',
   clientX: number,
   clientY: number,
+  forceSelection: boolean,
 ): MouseEventInit {
   return {
     clientX, clientY,
     bubbles: true, cancelable: true,
     detail: 1,
-    shiftKey: true, altKey: true,
+    shiftKey: forceSelection, altKey: true,
     button: 0, buttons: type === 'mouseup' ? 0 : 1,
   };
 }
@@ -70,8 +74,15 @@ export interface TerminalPort {
   readLine(line: number, startColumn: number, endColumn: number): string;
   /** ขนาดเซลล์จริงบนจอ และมุมซ้ายบนของพื้นที่จอในพิกัด viewport ของเบราว์เซอร์ */
   screenMetrics(): { cellWidth: number; cellHeight: number; left: number; top: number };
+  /** แอปข้างในขอ mouse reporting อยู่ไหม — ตัดสินว่าต้องบังคับเลือกหรือไม่ */
+  mouseReporting(): boolean;
   /** ยิง mouse event สังเคราะห์เข้า xterm เพื่อให้มันวาดไฮไลต์ให้ */
-  dispatchMouse(type: 'mousedown' | 'mousemove' | 'mouseup', clientX: number, clientY: number): void;
+  dispatchMouse(
+    type: 'mousedown' | 'mousemove' | 'mouseup',
+    clientX: number,
+    clientY: number,
+    forceSelection: boolean,
+  ): void;
   clearSelection(): void;
 }
 
@@ -95,6 +106,10 @@ interface Drag {
 
 export function createTextSelection(deps: TextSelectionDeps) {
   const { terminal } = deps;
+
+  // อ่าน mouse reporting สดทุกครั้ง ไม่ใช่ตอนเข้าโหมด — แอปข้างในเปิด/ปิดได้ทุกเมื่อ
+  const dispatch = (type: 'mousedown' | 'mousemove' | 'mouseup', px: { x: number; y: number }): void =>
+    terminal.dispatchMouse(type, px.x, px.y, terminal.mouseReporting());
 
   let modeActive = false;
   let panes: PaneBounds[] = [];
@@ -198,7 +213,7 @@ export function createTextSelection(deps: TextSelectionDeps) {
       drag = { anchor, pane, focus: anchor };
 
       const px = pixelAt(anchor);
-      terminal.dispatchMouse('mousedown', px.x, px.y);
+      dispatch('mousedown', px);
     },
 
     pointerMove(clientX: number, clientY: number): void {
@@ -208,7 +223,7 @@ export function createTextSelection(deps: TextSelectionDeps) {
 
       drag.focus = { line: cell.line, column: clampColumn(cell.column, drag.pane) };
       const px = pixelAt(drag.focus);
-      terminal.dispatchMouse('mousemove', px.x, px.y);
+      dispatch('mousemove', px);
     },
 
     pointerUp(clientX: number, clientY: number): void {
@@ -217,7 +232,7 @@ export function createTextSelection(deps: TextSelectionDeps) {
       if (cell) drag.focus = { line: cell.line, column: clampColumn(cell.column, drag.pane) };
 
       const px = pixelAt(drag.focus);
-      terminal.dispatchMouse('mouseup', px.x, px.y);
+      dispatch('mouseup', px);
       finish();
     },
 
@@ -248,9 +263,9 @@ export function createTextSelection(deps: TextSelectionDeps) {
       deps.vibrate?.(10);
 
       const px = pixelAt(anchor);
-      terminal.dispatchMouse('mousedown', px.x, px.y);
+      dispatch('mousedown', px);
       const focusPx = pixelAt(focus);
-      terminal.dispatchMouse('mousemove', focusPx.x, focusPx.y);
+      dispatch('mousemove', focusPx);
     },
 
     /**

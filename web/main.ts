@@ -583,8 +583,8 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
 
         case 'tap': {
           // arm ของปุ่ม RMB มาก่อนทุกอย่าง รวมถึงลิงก์ — คลิกขวาบนลิงก์ต้องถึง TUI
-          // ไม่ใช่เปิดแท็บใหม่ (ยามอีกชั้นอยู่ใน links.ts เพราะ mousedown สังเคราะห์
-          // ยังวิ่งผ่าน listener เฟส capture ของเมาส์จริงด้วย)
+          // ไม่ใช่เปิดแท็บใหม่ (listener เฟส capture ของเมาส์จริงปล่อย mousedown
+          // สังเคราะห์ผ่านเสมอ ดู isTrusted ใน links.ts)
           if (pointerArm.consume()) {
             refreshKeybar();
             target.dispatchEvent(new MouseEvent('mousedown', mouseInit(g.x, g.y, { button: 2, buttons: 2 })));
@@ -689,8 +689,10 @@ function bindTouch(t: Terminal, fit: FitAddon): void {
   // เมาส์จริง: xterm ส่ง mouse report ให้ herdr ใน handler ของ mousedown ของมันเอง
   // ดักในเฟส capture เพื่อกลืนอีเวนต์ก่อนถึง xterm เมื่อมีลิงก์อยู่ใต้เคอร์เซอร์
   // ให้พฤติกรรมตรงกับการแตะ: คลิกลิงก์ = เปิดลิงก์อย่างเดียว ไม่สลับ pane
+  // mousedown สังเคราะห์ทุกตัว (โหมดเลือก, หมุด, dragStart) วิ่งผ่านตรงนี้ด้วย จึงต้อง
+  // ส่ง isTrusted ไปกรอง — ไม่งั้นเริ่มลากเลือกบน URL = เปิดแท็บใหม่และไม่มีไฮไลต์
   target.addEventListener('mousedown', e => {
-    if (!linkOpener?.handleMouseDown(cellAt(e.clientX, e.clientY), e.button)) return;
+    if (!linkOpener?.handleMouseDown(cellAt(e.clientX, e.clientY), e.button, e.isTrusted)) return;
     e.preventDefault();
     e.stopPropagation();
   }, { capture: true });

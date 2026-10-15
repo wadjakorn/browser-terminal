@@ -341,6 +341,10 @@ reporting ไว้ บน shell เปล่าๆ จะไม่มีอะ�
   iPad คือ `MacIntel` ทำให้ xterm คิดว่าเป็น Mac แล้วเงื่อนไข `shouldForceSelection`
   กลายเป็น `altKey && ตัวเลือกนี้` ถ้าเป็น false เงื่อนไขจะเป็นจริงไม่ได้เลย และ
   mousedown สังเคราะห์ของโหมดเลือกจะทะลุไปเป็นคลิกจริงในแอปข้างใน
+- **`altClickMovesCursor: false` ห้ามเปิดคืน** — `altKey` ของ event สังเคราะห์ในโหมดเลือก
+  คือธง column select แต่ xterm อ่านเป็น Alt+คลิก แล้วพิมพ์ปุ่มลูกศรเข้า PTY เพื่อย้าย cursor
+  เมื่อปล่อยเร็วกว่า 500 ms — การแตะครั้งเดียวในโหมดเลือกจึงยิง `ESC[C` เป็นร้อยตัวใส่
+  prompt ทั้งสองค่าถูกล็อกด้วยเทสต์ใน `terminal-options.ts`
 - **mouse event สังเคราะห์ที่ขับ selection ต้องมี `detail: 1`** — `SelectionService`
   ของ xterm แยกทางด้วยจำนวนคลิก (`1===e.detail ? _handleSingleClick : …`) และ
   `new MouseEvent()` ที่ไม่ระบุ `detail` ได้ 0 ซึ่งไม่เข้าสาขาไหนเลย ผลคือไม่มีการเลือก

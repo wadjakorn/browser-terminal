@@ -31,6 +31,7 @@ import { createReconnect } from './reconnect.js';
 import { createStrandedRetry } from './stranded-retry.js';
 import { createPointerArm } from './pointer-arm.js';
 import { suppressesContextMenu } from './context-menu.js';
+import { terminalOptions } from './terminal-options.js';
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -153,21 +154,7 @@ const pointerArm = createPointerArm();
 let refreshKeybar: () => void = () => {};
 
 function initTerminal(): { term: Terminal; fit: FitAddon; keybar: MountedKeybar } {
-  const t = new Terminal({
-    fontFamily: 'ui-monospace, monospace',
-    fontSize: loadFontSize(),
-    cursorBlink: true,
-    theme: { background: '#101014', foreground: '#d8d8e0' },
-    // บน iPad `navigator.platform` คือ 'MacIntel' ทำให้ xterm คิดว่าเป็น Mac แล้ว
-    // shouldForceSelection กลายเป็น `altKey && ตัวเลือกนี้` — ถ้าปล่อยเป็น false
-    // เงื่อนไขจะเป็นจริงไม่ได้เลย และ mousedown สังเคราะห์ของเราจะทะลุไปถึงแอปข้างใน
-    // กลายเป็นคลิกจริงที่สลับ pane ของ herdr ทุกครั้งที่ผู้ใช้พยายามเลือกข้อความ
-    //
-    // ตั้ง true ได้โดยไม่ต้องเช็ค platform: บนเครื่องที่ไม่ใช่ Mac ไม่มี predicate
-    // ตัวไหนอ่านค่านี้เลย (shouldForceSelection ใช้ shiftKey, shouldColumnSelect
-    // ใช้ `!(isMac && ค่านี้)` ซึ่งเป็นจริงอยู่แล้วเมื่อ isMac เป็น false)
-    macOptionClickForcesSelection: true,
-  });
+  const t = new Terminal(terminalOptions(loadFontSize()));
   const fit = new FitAddon();
   t.loadAddon(fit);
   t.open($('terminal'));
